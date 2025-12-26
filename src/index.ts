@@ -1,11 +1,21 @@
 import express from 'express';
 import { connectDatabase } from './config/database';
 import { config } from './config/env';
+import { clerkMiddleware } from '@clerk/express';
+
+import dashboardRoutes from "./routes/dashboard.routes";
 
 const app = express();
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+app.get("/", (req, res) => res.send("ok"));
+app.get("/health", (req, res) => res.send("ok"));
+
+app.use(clerkMiddleware());
+
+app.use("/api/dashboard", dashboardRoutes);
 
 const startServer = async () => {
     try {

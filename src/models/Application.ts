@@ -33,6 +33,7 @@ export interface IApplication extends Document {
 
     source?: {
         provider?: "gmail" | " outlook";
+        inboxEmail?: string;
         threadId?: string;
         lastMessageId?: string;
     }
@@ -52,6 +53,7 @@ const linkSchema = new Schema(
 const sourceSchema = new Schema(
     {
         provider: { type: String, enum: ["gmail", "outlook"] },
+        inboxEmai: { type: String, lowercase: true, trim: true },
         threadId: { type: String, trim: true },
         lastMessageId: { type: String, trim: true },
     },
