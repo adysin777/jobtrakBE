@@ -1,16 +1,8 @@
 import { Router } from "express";
 import { requireUser } from "../middleware/requireUser";
+import { getDashboard } from "../controllers/dashboard.controller";
 
 const router = Router();
-
-router.get("/", requireUser, async (req, res) => {
-    res.json({
-        ok: true,
-        userId: req.userId,
-    });
-});
-
-console.log("Mounted /api/dashboard");
-
+router.get("/", requireUser, getDashboard);
 export default router;
 
