@@ -29,6 +29,11 @@ const userDashboardStatsSchema = new Schema<IUserDashboardStats>(
             unique: true,
             index: true,
         },
+        activeCount: {
+            type: Number,
+            required: true,
+            default: 0,
+        },
         countsByStatus: {
             type: Map,
             of: Number,
