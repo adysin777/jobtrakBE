@@ -6,11 +6,22 @@ import { UserDailyStats } from "../models/UserDailyStats";
 import type { ApplicationStatus } from "../models/UserDashboardStats";
 
 function toISO(d: Date) {
+    if (!d || isNaN(d.getTime())) {
+        throw new Error(`Invalid date provided to toISO: ${d}`);
+    }
     return d.toISOString();
 }
 
-function ymd(d: Date) {
-    return d.toISOString().slice(0, 10);
+function ymd(d: Date | string | null | undefined): string {
+    if (!d) {
+        return new Date().toISOString().slice(0, 10);
+    }
+    const dateObj = d instanceof Date ? d : new Date(d);
+    if (isNaN(dateObj.getTime())) {
+        console.warn(`Invalid date provided to ymd: ${d}`);
+        return new Date().toISOString().slice(0, 10);
+    }
+    return dateObj.toISOString().slice(0, 10);
 }
 
 function getStatusCount(counts: unknown, status: ApplicationStatus): number {
@@ -124,7 +135,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     }));
 
     const graph: DashboardResponse["graph"] = (dailyStats ?? []).map((d: any) => ({
-        date: typeof d.date === "string" ? d.date : ymd(new Date(d.date)),
+        date: typeof d.date === "string" ? d.date : ymd(d.date),
         appliedCount: d.appliedCount ?? 0,
     }));
 
