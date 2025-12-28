@@ -4,6 +4,7 @@ import { config } from './config/env';
 import { clerkMiddleware } from '@clerk/express';
 
 import dashboardRoutes from "./routes/dashboard.routes";
+import mongoose from "mongoose";
 
 const app = express();
 
@@ -16,6 +17,15 @@ app.get("/health", (req, res) => res.send("ok"));
 app.use(clerkMiddleware());
 
 app.use("/api/dashboard", dashboardRoutes);
+
+app.get("/debug/db", (req, res) => {
+    res.json({
+      pid: process.pid,
+      readyState: mongoose.connection.readyState, // 0=disconnected, 1=connected, 2=connecting, 3=disconnecting
+      host: mongoose.connection.host,
+      name: mongoose.connection.name,
+    });
+  });
 
 const startServer = async () => {
     try {
