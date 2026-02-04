@@ -13,8 +13,10 @@ export interface DashboardResponse {
         title: string;
         startAt: string;
         endAt?: string;
+        duration?: number;
         applicationId?: string;
         company?: string;
+        role?: string;
     }>;
     graph: Array<{
         date: string;

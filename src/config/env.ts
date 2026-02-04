@@ -14,4 +14,5 @@ export const config = {
     mongodbUri: process.env.MONGODB_URI!,
     port: parseInt(process.env.PORT!, 10),
     nodeEnv: process.env.NODE_ENV!,
+    ingestSecret: process.env.INGEST_SECRET || "",
 };

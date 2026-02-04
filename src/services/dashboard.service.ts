@@ -60,6 +60,8 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         UserDailyStats.find({ userId }).sort({ date: 1 }).limit(90).lean(),
     ])
 
+    console.log(upcomingItems);
+
     const calendarDays = await ScheduledItem.aggregate([
         {
           $match: {
@@ -130,8 +132,10 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         title: x.title,
         startAt: toISO(new Date(x.startAt)),
         endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
+        duration: x.duration,
         applicationId: x.applicationId ? String(x.applicationId) : undefined,
-        company: x.company ?? undefined,
+        company: x.companyName ?? undefined,
+        role: x.roleTitle ?? undefined,
     }));
 
     const graph: DashboardResponse["graph"] = (dailyStats ?? []).map((d: any) => ({
@@ -152,8 +156,10 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
             title: x.title,
             startAt: toISO(new Date(x.startAt)),
             endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
+            duration: x.duration,
             applicationId: x.applicationId ? String(x.applicationId) : undefined,
             company: x.companyName ?? undefined,
+            role: x.roleTitle ?? undefined,
         })),
     };
 

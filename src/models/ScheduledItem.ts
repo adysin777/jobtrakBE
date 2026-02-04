@@ -20,6 +20,7 @@ export interface IScheduledItem extends Document {
 
     startAt: Date;
     endAt?: Date;
+    duration?: number;
     timezone: string;
 
     notes?: string;
@@ -81,7 +82,7 @@ const scheduledItemSchema = new Schema<IScheduledItem>(
         title: { type: String, required: true, trim: true },
         startAt: { type: Date, required: true, index: true, },
         endAt: { type: Date},
-
+        duration: { type: Number },
         timezone: { type: String, required: true, default: "EST" },
 
         notes: { type: String, trim: true },
