@@ -6,6 +6,7 @@ import { clerkMiddleware } from '@clerk/express';
 import dashboardRoutes from "./routes/dashboard.routes";
 import calendarRoutes from "./routes/calendar.routes";
 import ingestRoutes from "./routes/ingest.routes";
+import inboxRoutes from "./routes/inboxes.routes";
 
 import mongoose from "mongoose";
 
@@ -34,13 +35,14 @@ app.use(
 );
 
 app.get("/", (req, res) => res.send("ok"));
-app.get("/health", (req, res) => res.send("ok"));
+app.get("/health", (req, res) => res.send("okk"));
 
 app.use(clerkMiddleware());
 
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/calendar", calendarRoutes);
 app.use("/api/ingest", ingestRoutes);
+app.use("/api/inboxes", inboxRoutes);
 
 app.get("/debug/db", (req, res) => {
     res.json({

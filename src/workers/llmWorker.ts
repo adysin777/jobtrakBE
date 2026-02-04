@@ -50,6 +50,10 @@ async function main() {
                 return; // Skip non-job emails
             }
 
+            if (raw.userId) {
+                ingestEvent.userId = raw.userId;
+            }
+
             console.log("📤 Calling ingestion API...");
             await postIngest(ingestEvent);
             console.log("✅ Successfully ingested job:", job.id);

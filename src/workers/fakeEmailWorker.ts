@@ -6,6 +6,7 @@ async function main() {
     
     const payload = {
         userEmail: "test@uwaterloo.ca",
+        userId: "user-id-test",
         provider: "gmail",
         inboxEmail: "test@uwaterloo.ca",
         messageId: messageId,

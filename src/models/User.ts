@@ -11,6 +11,9 @@ export interface IUser extends Document {
         email: string;
         provider: "gmail" | "outlook";
         status: "connected" | "error" | "disconnected";
+        accessToken: string;
+        refreshToken: string;
+        expiresAt: Date;
         createdAt: Date;
     }[];
 
@@ -35,6 +38,18 @@ const connectedInboxSchema = new Schema(
             type: String,
             enum: ["connected", "error", "disconnected"],
             default: "connected",
+        },
+        accessToken: {
+            type: String,
+            required: true,
+        },
+        refreshToken: {
+            type: String,
+            required: true,
+        },
+        expiresAt: {
+            type: Date,
+            required: true,
         },
         createdAt: {
             type: Date,
