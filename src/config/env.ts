@@ -15,4 +15,5 @@ export const config = {
     port: parseInt(process.env.PORT!, 10),
     nodeEnv: process.env.NODE_ENV!,
     ingestSecret: process.env.INGEST_SECRET || "",
+    backendUrl: process.env.BACKEND_URL || `http://localhost:${parseInt(process.env.PORT!, 10)}`,
 };

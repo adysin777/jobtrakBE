@@ -14,6 +14,8 @@ export interface IUser extends Document {
         accessToken: string;
         refreshToken: string;
         expiresAt: Date;
+        lastProcessedMessageId?: string;
+        lastProcessedAt?: Date;
         createdAt: Date;
     }[];
 
@@ -50,6 +52,12 @@ const connectedInboxSchema = new Schema(
         expiresAt: {
             type: Date,
             required: true,
+        },
+        lastProcessedMessageId: {
+            type: String,
+        },
+        lastProcessedAt: {
+            type: Date,
         },
         createdAt: {
             type: Date,
