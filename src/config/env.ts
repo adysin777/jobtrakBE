@@ -16,4 +16,6 @@ export const config = {
     nodeEnv: process.env.NODE_ENV!,
     ingestSecret: process.env.INGEST_SECRET || "",
     backendUrl: process.env.BACKEND_URL || `http://localhost:${parseInt(process.env.PORT!, 10)}`,
+    gmailPubSubTopic: process.env.GMAIL_PUBSUB_TOPIC || "",
+    publicUrl: process.env.PUBLIC_URL || "",
 };

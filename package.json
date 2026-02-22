@@ -7,7 +7,8 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "seed:dev": "ts-node src/scripts/seedDev.ts"
+    "seed:dev": "ts-node src/scripts/seedDev.ts",
+    "tunnel": "ngrok http 3000"
   },
   "keywords": [],
   "author": "",

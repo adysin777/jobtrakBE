@@ -16,6 +16,8 @@ export interface IUser extends Document {
         expiresAt: Date;
         lastProcessedMessageId?: string;
         lastProcessedAt?: Date;
+        historyId?: string;
+        watchExpiration?: Date;
         createdAt: Date;
     }[];
 
@@ -59,6 +61,12 @@ const connectedInboxSchema = new Schema(
         lastProcessedAt: {
             type: Date,
         },
+        historyId: {
+            type: String,
+        },
+        watchExpiration: {
+            type: Date,
+        },
         createdAt: {
             type: Date,
             default: Date.now,
@@ -100,5 +108,8 @@ const userSchema = new Schema<IUser>(
         timestamps: true,
     }
 );
+
+// Fast lookup: "which user has this inbox email?" (webhook, workers)
+userSchema.index({ "connectedInboxes.email": 1, "connectedInboxes.provider": 1 });
 
 export const User = mongoose.model<IUser>("User", userSchema);

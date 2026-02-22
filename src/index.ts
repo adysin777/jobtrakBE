@@ -7,6 +7,7 @@ import dashboardRoutes from "./routes/dashboard.routes";
 import calendarRoutes from "./routes/calendar.routes";
 import ingestRoutes from "./routes/ingest.routes";
 import inboxRoutes from "./routes/inboxes.routes";
+import webhooksRoutes from "./routes/webhooks.routes";
 
 import mongoose from "mongoose";
 
@@ -43,6 +44,7 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/calendar", calendarRoutes);
 app.use("/api/ingest", ingestRoutes);
 app.use("/api/inboxes", inboxRoutes);
+app.use("/api/webhooks", webhooksRoutes);
 
 app.get("/debug/db", (req, res) => {
     res.json({
