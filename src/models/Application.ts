@@ -32,7 +32,7 @@ export interface IApplication extends Document {
     aiImportantLinks?: { label: string; url: string }[];
 
     source?: {
-        provider?: "gmail" | " outlook";
+        provider?: "gmail" | "outlook";
         inboxEmail?: string;
         threadId?: string;
         lastMessageId?: string;
@@ -53,7 +53,7 @@ const linkSchema = new Schema(
 const sourceSchema = new Schema(
     {
         provider: { type: String, enum: ["gmail", "outlook"] },
-        inboxEmai: { type: String, lowercase: true, trim: true },
+        inboxEmail: { type: String, lowercase: true, trim: true },
         threadId: { type: String, trim: true },
         lastMessageId: { type: String, trim: true },
     },
@@ -126,6 +126,7 @@ applicationSchema.index({ userId: 1, lastEventAt: -1, _id: -1 });
 applicationSchema.index({ userId: 1, isActive: 1, lastEventAt: -1 });
 applicationSchema.index({ userId: 1, status: 1, lastEventAt: -1 });
 applicationSchema.index({ userId: 1, companyNorm: 1, titleNorm: 1 });
+applicationSchema.index({ userId: 1, "source.threadId": 1 }); // same thread = same application
 applicationSchema.index({ userId: 1, appliedAt: -1 });
 
 export const Application = mongoose.model<IApplication>("Application", applicationSchema);

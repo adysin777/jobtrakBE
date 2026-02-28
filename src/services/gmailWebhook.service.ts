@@ -24,9 +24,19 @@ async function refreshTokenIfNeeded(inbox: { accessToken: string; refreshToken: 
     const expiresAt = new Date(inbox.expiresAt);
     if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
         oauth2Client.setCredentials({ refresh_token: inbox.refreshToken });
-        const { credentials } = await oauth2Client.refreshAccessToken();
-        if (!credentials.access_token) throw new Error("Failed to refresh token");
-        return credentials.access_token;
+        try {
+            const { credentials } = await oauth2Client.refreshAccessToken();
+            if (!credentials.access_token) throw new Error("Failed to refresh token");
+            return credentials.access_token;
+        } catch (err: unknown) {
+            const data = (err as { response?: { data?: { error?: string } } })?.response?.data;
+            if (data?.error === "invalid_grant") {
+                const e = new Error("GMAIL_REFRESH_TOKEN_REVOKED") as Error & { code: string };
+                e.code = "GMAIL_REFRESH_TOKEN_REVOKED";
+                throw e;
+            }
+            throw err;
+        }
     }
     return inbox.accessToken;
 }
@@ -84,7 +94,22 @@ export async function processGmailWebhookPush(body: PubSubPushBody): Promise<voi
     const inbox = user.connectedInboxes[inboxIndex];
     const storedHistoryId = inbox.historyId;
 
-    const accessToken = await refreshTokenIfNeeded(inbox);
+    let accessToken: string;
+    try {
+        accessToken = await refreshTokenIfNeeded(inbox);
+    } catch (err: unknown) {
+        const code = (err as { code?: string })?.code;
+        if (code === "GMAIL_REFRESH_TOKEN_REVOKED") {
+            user.connectedInboxes[inboxIndex].status = "disconnected";
+            await user.save();
+            console.warn(
+                `Gmail refresh token expired or revoked for ${inbox.email}. Inbox marked disconnected. User must reconnect Gmail.`
+            );
+            return;
+        }
+        throw err;
+    }
+
     oauth2Client.setCredentials({
         access_token: accessToken,
         refresh_token: inbox.refreshToken,

@@ -1,8 +1,6 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
-export type ScheduledItemType =
-  | "OA"
-  | "INTERVIEW"
+export type ScheduledItemType = "OA" | "INTERVIEW";
 
 export type ScheduledItemSource = "auto" | "manual";
 
@@ -13,7 +11,11 @@ export interface IScheduledItemLink {
 
 export interface IScheduledItem extends Document {
     userId: Types.ObjectId;
-    applicationId: Types.ObjectId;
+    /** Set when event is assigned to an application; null until then for auto-created items */
+    applicationId?: Types.ObjectId;
+
+    /** Set when created from an event (source auto); used to set applicationId when event is assigned */
+    eventId?: Types.ObjectId;
 
     type: ScheduledItemType;
     title: string;
@@ -52,6 +54,7 @@ const linkSchema = new Schema<IScheduledItemLink>(
 const sourceMetaSchema = new Schema(
     {
         provider: { type: String, enum: ["gmail", "outlook"] },
+        inboxEmail: { type: String, lowercase: true, trim: true },
         messageId: { type: String, trim: true },
         threadId: { type: String, trim: true },
     },
@@ -69,7 +72,13 @@ const scheduledItemSchema = new Schema<IScheduledItem>(
         applicationId: {
             type: Schema.Types.ObjectId,
             ref: "Application",
-            required: true,
+            default: null,
+            index: true,
+        },
+        eventId: {
+            type: Schema.Types.ObjectId,
+            ref: "Event",
+            default: null,
             index: true,
         },
         type: {
@@ -106,7 +115,8 @@ const scheduledItemSchema = new Schema<IScheduledItem>(
 
 scheduledItemSchema.index({ userId: 1, startAt: 1 });
 scheduledItemSchema.index({ userId: 1, startAt: 1, type: 1 });
-scheduledItemSchema.index({ applicationId: 1, startAt: 1 });
+scheduledItemSchema.index({ applicationId: 1, startAt: 1 }); // sparse: only when assigned
+scheduledItemSchema.index({ eventId: 1 }); // find items by event (e.g. set applicationId on assign)
 
 scheduledItemSchema.index(
     { userId: 1, "sourceMeta.messageId": 1, type: 1, startAt: 1 },

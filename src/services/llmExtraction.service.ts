@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { IngestEventSchema, type IngestEvent } from "../types/ingestEvent.types";
+import { EventPayloadSchema, type EventPayload } from "../types/event.types";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -37,7 +37,12 @@ const ingestEventJsonSchema = {
     status: {
       type: "string",
       enum: ["APPLIED", "OA", "INTERVIEW", "OFFER", "REJECTED"],
-      description: "Current status of the application",
+      description: "Application pipeline status after this email",
+    },
+    eventType: {
+      type: "string",
+      enum: ["OA", "INTERVIEW", "OFFER", "REJECTION", "ACKNOWLEDGEMENT", "RESCHEDULE", "OTHER_UPDATE"],
+      description: "Broad category: ACKNOWLEDGEMENT (application received), OA, INTERVIEW, OFFER, REJECTION, RESCHEDULE (rescheduling existing meeting), OTHER_UPDATE",
     },
     aiSummary: {
       type: "string",
@@ -95,7 +100,31 @@ const ingestEventJsonSchema = {
   additionalProperties: false,
 } as const;
 
-export async function extractJobEventFromEmail(email: EmailData): Promise<IngestEvent | null> {
+/** Map status to eventType when LLM omits eventType (backward compat) */
+function statusToEventType(status: string): EventPayload["eventType"] {
+  const m: Record<string, EventPayload["eventType"]> = {
+    APPLIED: "ACKNOWLEDGEMENT",
+    OA: "OA",
+    INTERVIEW: "INTERVIEW",
+    OFFER: "OFFER",
+    REJECTED: "REJECTION",
+  };
+  return m[status] ?? "OTHER_UPDATE";
+}
+
+/** Map eventType to pipeline status so Application advances correctly (eventType is source of truth for stage) */
+function eventTypeToStatus(eventType: EventPayload["eventType"], fallback: EventPayload["status"]): EventPayload["status"] {
+  const m: Record<string, EventPayload["status"]> = {
+    OA: "OA",
+    INTERVIEW: "INTERVIEW",
+    OFFER: "OFFER",
+    REJECTION: "REJECTED",
+    ACKNOWLEDGEMENT: "APPLIED",
+  };
+  return (m[eventType] ?? fallback) as EventPayload["status"];
+}
+
+export async function extractJobEventFromEmail(email: EmailData): Promise<EventPayload | null> {
   const receivedAtDate = new Date(email.receivedAt);
   const receivedAtISO = receivedAtDate.toISOString();
   const receivedAtReadable = receivedAtDate.toLocaleString('en-US', {
@@ -125,6 +154,7 @@ IMPORTANT: If the email mentions scheduling an interview, it IS job-related. Ext
 - Company name: Extract from email (sender domain, email content, or company mentioned)
 - Role title: Extract if mentioned, otherwise use "Software Engineer" or similar based on context
 - Status: Must be one of: APPLIED, OA, INTERVIEW, OFFER, REJECTED
+- eventType: One of OA, INTERVIEW, OFFER, REJECTION, ACKNOWLEDGEMENT, RESCHEDULE, OTHER_UPDATE (use RESCHEDULE when email is rescheduling an existing interview/OA)
 - Scheduled items: Extract interviews/OAs with dates/times
 - AI summary: Brief summary of the email content
 
@@ -171,7 +201,7 @@ Extract job application information from this email. If it's not job-related, se
     }
 
     const parsed = JSON.parse(content) as any;
-    console.log("🤖 GPT-4o Mini extracted:", JSON.stringify(parsed, null, 2));
+    console.log("GPT-4o Mini extracted:", JSON.stringify(parsed, null, 2));
 
     // Check if email is not job-related
     if (!parsed.isJobRelated) {
@@ -220,10 +250,12 @@ Extract job application information from this email. If it's not job-related, se
       return dateStr;
     };
 
-    // Build IngestEvent from extracted data
-    const ingestEvent: IngestEvent = {
+    // Build EventPayload (userId set by caller). Derive status from eventType so OA/INTERVIEW/OFFER/REJECTION advance the application.
+    const eventType = parsed.eventType ?? statusToEventType(parsed.status);
+    const status = eventTypeToStatus(eventType, parsed.status as EventPayload["status"]);
+    const payload: EventPayload = {
+      userId: "", // caller must set
       userEmail: email.userEmail,
-      userId: email.userId,
       provider: email.provider,
       inboxEmail: email.inboxEmail,
       messageId: email.messageId,
@@ -231,12 +263,12 @@ Extract job application information from this email. If it's not job-related, se
       receivedAt: email.receivedAt,
       companyName: parsed.companyName,
       roleTitle: parsed.roleTitle,
-      status: parsed.status,
+      status,
+      eventType,
       aiSummary: parsed.aiSummary,
       scheduledItems: parsed.scheduledItems?.map((item: any) => {
         const normalizedStart = normalizeDateTime(item.startAt)!;
         const normalizedEnd = item.endAt ? normalizeDateTime(item.endAt) : undefined;
-        
         return {
           type: item.type,
           title: item.title,
@@ -250,8 +282,7 @@ Extract job application information from this email. If it's not job-related, se
       }),
     };
 
-    // Validate with Zod schema
-    return IngestEventSchema.parse(ingestEvent);
+    return EventPayloadSchema.parse(payload);
   } catch (error) {
     console.error("OpenAI extraction error:", error);
     throw error;
