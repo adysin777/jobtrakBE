@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { connectGmailService, gmailCallbackService, disconnectInboxService } from "../services/inboxes.service";
+import { notifyDashboardUpdate } from "../services/sse.service";
 
 export async function connectGmail(req: Request, res: Response) {
     try {
@@ -23,10 +24,11 @@ export async function gmailCallback(req: Request, res: Response) {
 
         await gmailCallbackService(state, code);
 
-        return res.redirect(`${process.env.FRONTEND_URL || "http://localhost:5173"}/dashboard?connected=gmail`);
+        notifyDashboardUpdate(state);
+        return res.redirect(`${process.env.FRONTEND_URL || "http://localhost:5173"}/inbox-connected`);
     } catch (error) {
         console.error("Gmail callback error:", error);
-        return res.redirect(`${process.env.FRONTEND_URL || "http://localhost:5173"}/dashboard?error=gmail`);
+        return res.redirect(`${process.env.FRONTEND_URL || "http://localhost:5173"}/inbox-connected?error=1`);
     }
 }
 

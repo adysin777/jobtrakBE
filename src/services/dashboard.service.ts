@@ -1,4 +1,6 @@
+import mongoose from "mongoose";
 import type { DashboardResponse } from "../types/dashboard.types";
+import { User } from "../models/User";
 import { UserDashboardStats } from "../models/UserDashboardStats";
 import { ScheduledItem } from "../models/ScheduledItem"
 import { UserDailyStats } from "../models/UserDailyStats";
@@ -53,19 +55,23 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const end = new Date(start);
     end.setDate(end.getDate() + 1);
 
-    const [statsDoc, upcomingItems, todayItems, dailyStats] = await Promise.all([
+    const userIdObj = new mongoose.Types.ObjectId(userId);
+    const [statsDoc, upcomingItems, todayItems, dailyStats, userDoc] = await Promise.all([
         UserDashboardStats.findOne({ userId }).lean(),
-        ScheduledItem.find({ userId, startAt: { $gte: now } }).sort({ startAt: 1 }).limit(10).lean(),
-        ScheduledItem.find({ userId, startAt: { $gte: start, $lt: end } }).sort({ startAt: 1}).lean(),
+        ScheduledItem.find({ userId: userIdObj, startAt: { $gte: now } }).sort({ startAt: 1 }).limit(10).lean(),
+        ScheduledItem.find({ userId: userIdObj, startAt: { $gte: start, $lt: end } }).sort({ startAt: 1}).lean(),
         UserDailyStats.find({ userId }).sort({ date: 1 }).limit(90).lean(),
+        User.findById(userId).select("connectedInboxes").lean(),
     ])
 
     console.log(upcomingItems);
 
+    const connectedInboxCount = (userDoc as any)?.connectedInboxes?.filter((i: any) => i.status === "connected").length ?? 0;
+
     const calendarDays = await ScheduledItem.aggregate([
         {
           $match: {
-            userId,
+            userId: userIdObj,
             startAt: { $gte: monthStart, $lt: monthEnd },
           },
         },
@@ -163,6 +169,40 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         })),
     };
 
-    return { counts, upcoming, graph, calendarMonth, today };
+    return { counts, upcoming, graph, calendarMonth, today, connectedInboxCount };
+}
+
+/** Scheduled items for a single day (date = YYYY-MM-DD, UTC day bounds). Sorted by startAt. */
+export async function getTimelineForDate(
+    userId: string,
+    dateStr: string
+): Promise<{ date: string; items: DashboardResponse["upcoming"] }> {
+    const dayStart = new Date(`${dateStr}T00:00:00.000Z`);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+    if (isNaN(dayStart.getTime()) || isNaN(dayEnd.getTime())) {
+        return { date: dateStr, items: [] };
+    }
+    const userIdObj = new mongoose.Types.ObjectId(userId);
+    const items = await ScheduledItem.find({
+        userId: userIdObj,
+        startAt: { $gte: dayStart, $lt: dayEnd },
+    })
+        .sort({ startAt: 1 })
+        .lean();
+    return {
+        date: dateStr,
+        items: (items as any[]).map((x) => ({
+            id: String(x._id),
+            type: x.type,
+            title: x.title,
+            startAt: toISO(new Date(x.startAt)),
+            endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
+            duration: x.duration,
+            applicationId: x.applicationId ? String(x.applicationId) : undefined,
+            company: x.companyName ?? undefined,
+            role: x.roleTitle ?? undefined,
+        })),
+    };
 }
 

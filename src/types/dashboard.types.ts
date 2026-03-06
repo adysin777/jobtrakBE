@@ -33,5 +33,7 @@ export interface DashboardResponse {
     today: {
         date: string;
         items: DashboardResponse["upcoming"];
-    }
+    };
+    /** Number of connected inboxes (status === "connected"). Used to show connect-inbox prompt when 0. */
+    connectedInboxCount: number;
 }

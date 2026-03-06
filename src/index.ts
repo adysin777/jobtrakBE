@@ -7,6 +7,7 @@ import dashboardRoutes from "./routes/dashboard.routes";
 import calendarRoutes from "./routes/calendar.routes";
 import ingestRoutes from "./routes/ingest.routes";
 import inboxRoutes from "./routes/inboxes.routes";
+import sseRoutes from "./routes/sse.routes";
 import webhooksRoutes from "./routes/webhooks.routes";
 
 import mongoose from "mongoose";
@@ -38,12 +39,22 @@ app.use(
 app.get("/", (req, res) => res.send("ok"));
 app.get("/health", (req, res) => res.send("okk"));
 
+// EventSource cannot send Authorization header; copy ?token= to header for SSE route
+app.use((req, res, next) => {
+    const token = req.query.token;
+    if (typeof token === "string" && token) {
+        req.headers.authorization = `Bearer ${token}`;
+    }
+    next();
+});
+
 app.use(clerkMiddleware());
 
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/calendar", calendarRoutes);
 app.use("/api/ingest", ingestRoutes);
 app.use("/api/inboxes", inboxRoutes);
+app.use("/api/sse", sseRoutes);
 app.use("/api/webhooks", webhooksRoutes);
 
 app.get("/debug/db", (req, res) => {

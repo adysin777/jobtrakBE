@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "seed:dev": "ts-node src/scripts/seedDev.ts",
-    "tunnel": "ngrok http 3000"
+    "tunnel": "ngrok http 3000",
+    "worker:llm": "ts-node src/workers/llmWorker.ts"
   },
   "keywords": [],
   "author": "",

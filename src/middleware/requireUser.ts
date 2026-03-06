@@ -61,7 +61,7 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
         }
 
         req.userId = user._id.toString();
-        return next;
+        return next();
     } catch (err) {
         return next(err);
     }
