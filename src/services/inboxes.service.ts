@@ -104,3 +104,24 @@ export async function disconnectInboxService(userId: string, email: string, prov
 
     await user.save();
 }
+
+export interface InboxListItem {
+    email: string;
+    provider: "gmail" | "outlook";
+    status: string;
+    createdAt: string;
+}
+
+export async function listInboxesService(userId: string): Promise<InboxListItem[]> {
+    const user = await User.findById(userId).select("connectedInboxes").lean();
+    if (!user) return [];
+    const inboxes = (user.connectedInboxes as any[]) ?? [];
+    return inboxes
+        .filter((i) => i.status === "connected")
+        .map((i) => ({
+            email: i.email,
+            provider: i.provider,
+            status: i.status,
+            createdAt: i.createdAt ? new Date(i.createdAt).toISOString() : new Date().toISOString(),
+        }));
+}

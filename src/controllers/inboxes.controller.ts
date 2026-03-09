@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { connectGmailService, gmailCallbackService, disconnectInboxService } from "../services/inboxes.service";
+import { connectGmailService, gmailCallbackService, disconnectInboxService, listInboxesService } from "../services/inboxes.service";
 import { notifyDashboardUpdate } from "../services/sse.service";
 
 export async function connectGmail(req: Request, res: Response) {
@@ -41,6 +41,17 @@ export async function disconnectInbox(req: Request, res: Response) {
         return res.json({ ok: true });
     } catch (error) {
         console.error("Disconnect inbox error:", error);
+        return res.status(400).json({ error: String(error) });
+    }
+}
+
+export async function listInboxes(req: Request, res: Response) {
+    try {
+        const userId = req.userId!;
+        const inboxes = await listInboxesService(userId);
+        return res.json({ inboxes });
+    } catch (error) {
+        console.error("List inboxes error:", error);
         return res.status(400).json({ error: String(error) });
     }
 }
