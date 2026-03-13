@@ -6,6 +6,8 @@ import { ScheduledItem } from "../models/ScheduledItem";
 import { UserDashboardStats } from "../models/UserDashboardStats";
 import { UserDailyStats } from "../models/UserDailyStats";
 import type { ApplicationStatus } from "../models/Application";
+import { getMaxTrackedApplications } from "../config/planConfig";
+import { syncUserPlanFromStripe, expireUserPlanIfNeeded } from "../services/billing.service";
 import mongoose from "mongoose";
 
 function normalize(str: string): string {
@@ -128,6 +130,21 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
 
     let application;
     if (applications.length === 0) {
+        // Would create a new application – enforce free-tier limit.
+        const user = await User.findById(userId);
+        if (!user) throw new Error("User not found");
+        if (user.stripeCustomerId) {
+          await syncUserPlanFromStripe(user);
+        }
+        await expireUserPlanIfNeeded(user);
+        const maxApps = getMaxTrackedApplications(user.plan, user.planActiveUntil ?? null);
+        if (Number.isFinite(maxApps)) {
+            const count = await Application.countDocuments({ userId });
+            if (count >= maxApps) {
+                console.log(`Free limit reached for user ${userId}: ${count} >= ${maxApps}, skipping assignment for event ${eventId}`);
+                return;
+            }
+        }
         application = await Application.create({
             userId,
             companyName: event.companyName,

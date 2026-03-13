@@ -1,6 +1,6 @@
 import { Application, type IApplication } from "../models/Application";
 import { Event } from "../models/Event";
-import mongoose from "mongoose";
+import mongoose, { type QueryFilter } from "mongoose";
 
 export type ListStatusFilter =
   | "all"
@@ -43,7 +43,7 @@ export async function listApplicationsService(
   userId: string,
   params: ListApplicationsParams
 ): Promise<ApplicationListItem[]> {
-  const query: mongoose.FilterQuery<IApplication> = {
+  const query: QueryFilter<IApplication> = {
     userId: new mongoose.Types.ObjectId(userId),
   };
 

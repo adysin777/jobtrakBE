@@ -23,6 +23,7 @@
     "googleapis": "^171.2.0",
     "ioredis": "^5.9.2",
     "mongoose": "^9.0.2",
+    "stripe": "^17.7.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {

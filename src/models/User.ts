@@ -3,8 +3,12 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface IUser extends Document {
     primaryEmail: string;
     name: string;
-    
-    plan: "free" | "premium";
+
+    plan: "free" | "premium" | "pro_monthly" | "pro_yearly";
+    planActiveUntil: Date | null;
+    stripeCustomerId: string | null;
+    stripeSubscriptionId: string | null;
+
     onboardingCompleted: boolean;
 
     connectedInboxes: {
@@ -92,9 +96,12 @@ const userSchema = new Schema<IUser>(
         },
         plan: {
             type: String,
-            enum: ["free", "premium"],
+            enum: ["free", "premium", "pro_monthly", "pro_yearly"],
             default: "free",
         },
+        planActiveUntil: { type: Date, default: null },
+        stripeCustomerId: { type: String, default: null },
+        stripeSubscriptionId: { type: String, default: null },
         onboardingCompleted: {
             type: Boolean,
             default: false,
