@@ -12,6 +12,7 @@ import meRoutes from "./routes/me.routes";
 import jobApplicationsRoutes from "./routes/jobApplications.routes";
 import sseRoutes from "./routes/sse.routes";
 import webhooksRoutes from "./routes/webhooks.routes";
+import { renewAllGmailWatches } from "./services/gmailSync.service";
 
 import mongoose from "mongoose";
 
@@ -84,6 +85,26 @@ const startServer = async () => {
         app.listen(config.port, () => {
             console.log(`Server is running on PORT ${config.port}`);
         });
+
+        if (config.gmailPubSubTopic) {
+            let renewalInFlight = false;
+            const runRenewal = async () => {
+                if (renewalInFlight) return;
+                renewalInFlight = true;
+                try {
+                    await renewAllGmailWatches();
+                } catch (error) {
+                    console.error("Gmail watch renewal job failed:", error);
+                } finally {
+                    renewalInFlight = false;
+                }
+            };
+
+            void runRenewal();
+            setInterval(() => {
+                void runRenewal();
+            }, 6 * 60 * 60 * 1000);
+        }
     } catch (error) {
         console.error("Failed to start server", error);
         process.exit(1);

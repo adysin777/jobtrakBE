@@ -4,8 +4,7 @@ import { User } from "../models/User";
 import { llmQueue } from "../queue/llmQueue";
 import mongoose from "mongoose";
 import { connectDatabase } from "../config/database";
-import { UserDailyStats } from "../models/UserDailyStats";
-import { disconnectInboxService } from "../services/inboxes.service";
+import { renewGmailWatchIfNeeded } from "../services/inboxes.service";
 
 const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -22,7 +21,18 @@ async function refreshTokenIfNeeded(inbox: any): Promise<string> {
             refresh_token: inbox.refreshToken,
         });
 
-        const { credentials } = await oauth2Client.refreshAccessToken();
+        let credentials;
+        try {
+            ({ credentials } = await oauth2Client.refreshAccessToken());
+        } catch (err: any) {
+            const data = err?.response?.data;
+            if (data?.error === "invalid_grant") {
+                const revokedError = new Error("GMAIL_REFRESH_TOKEN_REVOKED") as Error & { code: string };
+                revokedError.code = "GMAIL_REFRESH_TOKEN_REVOKED";
+                throw revokedError;
+            }
+            throw err;
+        }
 
         if (!credentials.access_token) {
             throw new Error("Failed to refresh token");
@@ -58,6 +68,7 @@ async function pollGmailInbox(user: any, inbox: any) {
         });
 
         const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+        await renewGmailWatchIfNeeded(user._id.toString(), inbox.email, gmail);
 
         // Fetch fresh user to get latest lastProcessedMessageId
         const currentUser = await User.findById(user._id);
@@ -170,7 +181,9 @@ async function pollGmailInbox(user: any, inbox: any) {
                 (i: { email: any; provider: string; }) => i.email === inbox.email && i.provider === "gmail"
             );
             if (inboxIndex >= 0) {
-                currentUser.connectedInboxes[inboxIndex].status = 'error';
+                const code = (error as { code?: string })?.code;
+                currentUser.connectedInboxes[inboxIndex].status =
+                    code === "GMAIL_REFRESH_TOKEN_REVOKED" ? "disconnected" : "error";
                 await currentUser.save();
             }
         }

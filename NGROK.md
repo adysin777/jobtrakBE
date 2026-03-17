@@ -58,6 +58,16 @@ You’ll get a public URL like `https://abc123.ngrok-free.app`. Use that as the 
 
 **Note:** The free ngrok URL changes every time you restart ngrok. For a stable URL, use a paid ngrok plan or deploy to a real host.
 
+## Where to see Gmail watch on Google’s side
+
+Google does **not** provide a single “watchlist” UI that lists which Gmail addresses are being watched.
+
+- **GCP Console → Pub/Sub → Topics:** You see your topic (e.g. the one in `GMAIL_PUBSUB_TOPIC`). That topic receives notifications for **any** Gmail user that has called `users.watch()` with this topic. You don’t see a list of those users in the UI.
+- **GCP Console → Pub/Sub → Subscriptions:** Your push subscription shows delivery stats and the endpoint URL. When a notification is pushed, the payload (in the push request body) contains `emailAddress` and `historyId` — so the only way to “see” which mailbox triggered it is from your backend logs or by inspecting the subscription’s message flow.
+- **Gmail API:** There is no “list watches” API. Each Gmail account has at most one active watch; it’s created when your app calls `gmail.users.watch()`. To know which accounts are watched, use your app’s stored state (e.g. backend log `[GmailSync] All Gmail inboxes (watchlist)` or your database `User.connectedInboxes`).
+
+So the canonical “watchlist” for your app is in your backend (logs + DB), not in a GCP dashboard.
+
 ## Optional: set BACKEND_URL when using ngrok
 
 If your app builds callback or webhook URLs from `BACKEND_URL`, set it to the current ngrok URL when running with a tunnel (e.g. in `.env` or when starting the server):

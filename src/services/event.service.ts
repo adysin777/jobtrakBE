@@ -10,8 +10,58 @@ import { getMaxTrackedApplications } from "../config/planConfig";
 import { syncUserPlanFromStripe, expireUserPlanIfNeeded } from "../services/billing.service";
 import mongoose from "mongoose";
 
-function normalize(str: string): string {
-    return str.toLocaleLowerCase().trim();
+const COMPANY_SUFFIXES = new Set([
+    "inc",
+    "incorporated",
+    "llc",
+    "ltd",
+    "limited",
+    "corp",
+    "corporation",
+    "co",
+    "company",
+    "plc",
+    "gmbh",
+]);
+
+const TITLE_VARIANT_TOKENS = new Set([
+    "summer",
+    "winter",
+    "spring",
+    "fall",
+    "autumn",
+]);
+
+function normalizeWhitespace(str: string): string {
+    return str.toLocaleLowerCase().trim().replace(/\s+/g, " ");
+}
+
+function tokenize(str: string): string[] {
+    return normalizeWhitespace(str)
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+}
+
+function normalizeCompany(str: string): string {
+    const tokens = tokenize(str).filter((token) => !COMPANY_SUFFIXES.has(token));
+    return tokens.join(" ");
+}
+
+function normalizeTitle(str: string): string {
+    return tokenize(str).join(" ");
+}
+
+function canonicalizeTitleVariant(str: string): string {
+    const tokens = tokenize(str).filter(
+        (token) => !TITLE_VARIANT_TOKENS.has(token) && !/^(19|20)\d{2}$/.test(token)
+    );
+    return tokens.join(" ");
+}
+
+function isActiveApplication(status: ApplicationStatus): boolean {
+    return status !== "REJECTED";
 }
 
 function getStatusRank(status: ApplicationStatus): number {
@@ -35,6 +85,136 @@ function statusFromEventType(eventType: string, fallback: ApplicationStatus): Ap
         ACKNOWLEDGEMENT: "APPLIED",
     };
     return m[eventType] ?? fallback;
+}
+
+async function markEventConflict(eventId: mongoose.Types.ObjectId, reason: string): Promise<void> {
+    await Event.updateOne(
+        { _id: eventId },
+        { $set: { assignmentStatus: "conflict" } }
+    );
+    console.log(`Event assignment conflict for ${eventId}: ${reason}`);
+}
+
+async function findApplicationByThreadHistory(event: any): Promise<any | null> {
+    if (!event.threadId) return null;
+
+    const priorEvent = await Event.findOne({
+        userId: event.userId,
+        threadId: event.threadId,
+        applicationId: { $ne: null },
+        _id: { $ne: event._id },
+    })
+        .sort({ receivedAt: -1 })
+        .lean();
+
+    if (priorEvent?.applicationId) {
+        const application = await Application.findOne({
+            _id: priorEvent.applicationId,
+            userId: event.userId,
+        });
+        if (application) return application;
+    }
+
+    return Application.findOne({
+        userId: event.userId,
+        "source.threadId": event.threadId,
+    }).sort({ lastEventAt: -1 });
+}
+
+function chooseSafeCompanyCandidate(event: any, applications: any[]): any | null {
+    const companyNorm = normalizeCompany(event.companyName);
+    const titleNorm = normalizeTitle(event.roleTitle);
+    const variantTitleNorm = canonicalizeTitleVariant(event.roleTitle);
+
+    const sameCompany = applications.filter(
+        (application) => normalizeCompany(application.companyName ?? application.companyNorm ?? "") === companyNorm
+    );
+    if (sameCompany.length === 0) return null;
+
+    const activeCandidates = sameCompany.filter((application) => isActiveApplication(application.status));
+    const pool = activeCandidates.length > 0 ? activeCandidates : sameCompany;
+
+    if (event.threadId) {
+        const byThread = pool.find((application) => application.source?.threadId === event.threadId);
+        if (byThread) return byThread;
+    }
+
+    const exactTitleMatches = pool.filter(
+        (application) => normalizeTitle(application.roleTitle ?? application.titleNorm ?? "") === titleNorm
+    );
+    if (exactTitleMatches.length === 1) return exactTitleMatches[0];
+    if (exactTitleMatches.length > 1) return null;
+
+    if (pool.length === 1 && activeCandidates.length > 0) return pool[0];
+
+    const canonicalTitleMatches = pool.filter(
+        (application) => canonicalizeTitleVariant(application.roleTitle ?? application.titleNorm ?? "") === variantTitleNorm
+    );
+    if (canonicalTitleMatches.length === 1) return canonicalTitleMatches[0];
+
+    return null;
+}
+
+async function attachScheduledItemsToApplication(event: any, applicationId: mongoose.Types.ObjectId): Promise<void> {
+    const pendingItems = await ScheduledItem.find({ eventId: event._id }).sort({ startAt: 1 });
+    if (pendingItems.length === 0) return;
+
+    if (event.eventType !== "RESCHEDULE") {
+        await ScheduledItem.updateMany(
+            { eventId: event._id },
+            { $set: { applicationId } }
+        );
+        return;
+    }
+
+    for (const pendingItem of pendingItems) {
+        const candidates = await ScheduledItem.find({
+            userId: event.userId,
+            applicationId,
+            type: pendingItem.type,
+            source: "auto",
+            _id: { $ne: pendingItem._id },
+        }).sort({ startAt: -1 });
+
+        const sameThreadCandidate = pendingItem.sourceMeta?.threadId
+            ? candidates.find((candidate) => candidate.sourceMeta?.threadId === pendingItem.sourceMeta?.threadId)
+            : null;
+        const targetItem = sameThreadCandidate ?? candidates[0] ?? null;
+
+        if (!targetItem) {
+            await ScheduledItem.updateOne(
+                { _id: pendingItem._id },
+                { $set: { applicationId } }
+            );
+            continue;
+        }
+
+        await ScheduledItem.updateOne(
+            { _id: targetItem._id },
+            {
+                $set: {
+                    applicationId,
+                    title: pendingItem.title,
+                    startAt: pendingItem.startAt,
+                    endAt: pendingItem.endAt,
+                    duration: pendingItem.duration,
+                    timezone: pendingItem.timezone,
+                    links: pendingItem.links,
+                    notes: pendingItem.notes,
+                    companyName: pendingItem.companyName ?? event.companyName,
+                    roleTitle: event.roleTitle,
+                    sourceMeta: {
+                        provider: event.provider,
+                        inboxEmail: event.inboxEmail,
+                        messageId: event.messageId,
+                        threadId: event.threadId ?? pendingItem.sourceMeta?.threadId ?? event.messageId,
+                    },
+                },
+            }
+        );
+
+        await ScheduledItem.deleteOne({ _id: pendingItem._id });
+    }
 }
 
 /**
@@ -76,28 +256,39 @@ export async function createEventFromPayload(payload: EventPayload): Promise<{ e
 
     if (data.scheduledItems && data.scheduledItems.length > 0) {
         for (const item of data.scheduledItems) {
-            await ScheduledItem.create({
-                userId,
-                eventId: event._id,
-                applicationId: undefined,
-                type: item.type,
-                title: item.title,
-                startAt: new Date(item.startAt),
-                endAt: item.endAt ? new Date(item.endAt) : undefined,
-                duration: item.duration,
-                timezone: "America/Toronto",
-                links: item.links ?? [],
-                notes: item.notes,
-                companyName: item.companyName ?? data.companyName,
-                roleTitle: data.roleTitle,
-                source: "auto",
-                sourceMeta: {
-                    provider: data.provider,
-                    inboxEmail: data.inboxEmail,
-                    messageId: data.messageId,
-                    threadId: data.threadId ?? data.messageId,
-                },
-            });
+            try {
+                await ScheduledItem.create({
+                    userId,
+                    eventId: event._id,
+                    applicationId: undefined,
+                    type: item.type,
+                    title: item.title,
+                    startAt: new Date(item.startAt),
+                    endAt: item.endAt ? new Date(item.endAt) : undefined,
+                    duration: item.duration,
+                    timezone: "America/Toronto",
+                    links: item.links ?? [],
+                    notes: item.notes,
+                    companyName: item.companyName ?? data.companyName,
+                    roleTitle: data.roleTitle,
+                    source: "auto",
+                    sourceMeta: {
+                        provider: data.provider,
+                        inboxEmail: data.inboxEmail,
+                        messageId: data.messageId,
+                        threadId: data.threadId ?? data.messageId,
+                    },
+                });
+            } catch (err: unknown) {
+                const isDuplicate = err && typeof err === "object" && "code" in err && (err as { code?: number }).code === 11000;
+                if (isDuplicate) {
+                    console.log(
+                        `[Ingest] Skipping duplicate ScheduledItem messageId=${data.messageId} type=${item.type} startAt=${item.startAt}`
+                    );
+                } else {
+                    throw err;
+                }
+            }
         }
     }
 
@@ -117,19 +308,52 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
     }
 
     const userId = event.userId;
-    const companyNorm = normalize(event.companyName);
-    const titleNorm = normalize(event.roleTitle);
+    const companyNorm = normalizeCompany(event.companyName);
+    const titleNorm = normalizeTitle(event.roleTitle);
     const receivedAt = event.receivedAt;
 
-    let applications = await Application.find({ userId, companyNorm, titleNorm }).sort({ lastEventAt: -1 });
+    let application = await findApplicationByThreadHistory(event);
 
-    if (event.threadId && applications.length > 0) {
-        const byThread = applications.find((a) => a.source?.threadId === event.threadId);
-        if (byThread) applications = [byThread];
+    if (!application) {
+        const exactApplications = await Application.find({ userId, companyNorm, titleNorm }).sort({ lastEventAt: -1 });
+        if (event.threadId && exactApplications.length > 0) {
+            const byThread = exactApplications.find((candidate) => candidate.source?.threadId === event.threadId);
+            if (byThread) {
+                application = byThread;
+            }
+        }
+
+        if (!application && exactApplications.length === 1) {
+            application = exactApplications[0];
+        }
+
+        if (!application && exactApplications.length > 1) {
+            const activeExactApplications = exactApplications.filter((candidate) => candidate.isActive);
+            if (activeExactApplications.length === 1) {
+                application = activeExactApplications[0];
+            } else {
+                await markEventConflict(eventId, `multiple exact matches for ${event.companyName} / ${event.roleTitle}`);
+                return;
+            }
+        }
     }
 
-    let application;
-    if (applications.length === 0) {
+    if (!application) {
+        const allApplications = await Application.find({ userId }).sort({ lastEventAt: -1 });
+        const sameCompany = allApplications.filter(
+            (candidate) => normalizeCompany(candidate.companyName) === companyNorm
+        );
+
+        if (sameCompany.length > 0) {
+            application = chooseSafeCompanyCandidate(event, sameCompany);
+            if (!application) {
+                await markEventConflict(eventId, `ambiguous company-level match for ${event.companyName}`);
+                return;
+            }
+        }
+    }
+
+    if (!application) {
         // Would create a new application – enforce free-tier limit.
         const user = await User.findById(userId);
         if (!user) throw new Error("User not found");
@@ -141,7 +365,7 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
         if (Number.isFinite(maxApps)) {
             const count = await Application.countDocuments({ userId });
             if (count >= maxApps) {
-                console.log(`Free limit reached for user ${userId}: ${count} >= ${maxApps}, skipping assignment for event ${eventId}`);
+                await markEventConflict(eventId, `application limit reached for user ${userId}: ${count} >= ${maxApps}`);
                 return;
             }
         }
@@ -156,7 +380,7 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
             statusUpdatedAt: receivedAt,
             appliedAt: receivedAt,
             lastEventAt: receivedAt,
-            isActive: event.status !== "REJECTED",
+            isActive: isActiveApplication(event.status),
             aiSummary: event.aiSummary,
             source: {
                 provider: event.provider,
@@ -165,11 +389,6 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
                 lastMessageId: event.messageId,
             },
         });
-    } else if (applications.length === 1) {
-        application = applications[0];
-    } else {
-        application = applications[0];
-        console.log(`Multiple applications for ${event.companyName} / ${event.roleTitle}; using most recent: ${application._id}`);
     }
 
     await Event.updateOne(
@@ -182,11 +401,14 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
         {
             $set: {
                 companyName: event.companyName,
+                companyNorm,
                 roleTitle: event.roleTitle,
+                titleNorm,
                 status: event.status,
                 statusRank: getStatusRank(event.status),
                 statusUpdatedAt: receivedAt,
                 lastEventAt: receivedAt,
+                isActive: isActiveApplication(event.status),
                 aiSummary: event.aiSummary,
                 source: {
                     provider: event.provider,
@@ -198,10 +420,7 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
         }
     );
 
-    await ScheduledItem.updateMany(
-        { eventId },
-        { $set: { applicationId: application._id } }
-    );
+    await attachScheduledItemsToApplication(event, application._id);
 
     const today = receivedAt.toISOString().slice(0, 10);
     await UserDashboardStats.findOneAndUpdate(

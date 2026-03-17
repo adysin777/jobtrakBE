@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import { User } from "../models/User";
 import { llmQueue } from "../queue/llmQueue";
+import { renewGmailWatchIfNeeded } from "./inboxes.service";
 
 const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -19,7 +20,11 @@ function isJobRelated(subject: string, body: string): boolean {
     return JOB_KEYWORDS.some(kw => s.includes(kw) || b.includes(kw));
 }
 
-async function refreshTokenIfNeeded(inbox: { accessToken: string; refreshToken: string; expiresAt: Date }): Promise<string> {
+async function refreshTokenIfNeeded(
+    user: any,
+    inboxIndex: number,
+    inbox: { accessToken: string; refreshToken: string; expiresAt: Date }
+): Promise<string> {
     const now = new Date();
     const expiresAt = new Date(inbox.expiresAt);
     if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
@@ -27,6 +32,11 @@ async function refreshTokenIfNeeded(inbox: { accessToken: string; refreshToken: 
         try {
             const { credentials } = await oauth2Client.refreshAccessToken();
             if (!credentials.access_token) throw new Error("Failed to refresh token");
+            user.connectedInboxes[inboxIndex].accessToken = credentials.access_token;
+            if (credentials.expiry_date) {
+                user.connectedInboxes[inboxIndex].expiresAt = new Date(credentials.expiry_date);
+            }
+            await user.save();
             return credentials.access_token;
         } catch (err: unknown) {
             const data = (err as { response?: { data?: { error?: string } } })?.response?.data;
@@ -96,7 +106,7 @@ export async function processGmailWebhookPush(body: PubSubPushBody): Promise<voi
 
     let accessToken: string;
     try {
-        accessToken = await refreshTokenIfNeeded(inbox);
+        accessToken = await refreshTokenIfNeeded(user, inboxIndex, inbox);
     } catch (err: unknown) {
         const code = (err as { code?: string })?.code;
         if (code === "GMAIL_REFRESH_TOKEN_REVOKED") {
@@ -115,6 +125,7 @@ export async function processGmailWebhookPush(body: PubSubPushBody): Promise<voi
         refresh_token: inbox.refreshToken,
     });
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    await renewGmailWatchIfNeeded(user._id.toString(), inbox.email, gmail);
 
     const startHistoryId = storedHistoryId || notificationHistoryId;
     let historyResponse;
