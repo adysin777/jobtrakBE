@@ -232,13 +232,70 @@ export async function createEventFromPayload(payload: EventPayload): Promise<{ e
     }
 
     const receivedAt = new Date(data.receivedAt);
+    const status = statusFromEventType(data.eventType, data.status as ApplicationStatus);
 
     const existing = await Event.findOne({ messageId: data.messageId, userId });
     if (existing) {
+        // Event already exists (idempotency by messageId+userId), but we still want to create
+        // ScheduledItems if this payload includes them (some webhooks can be retried / partial).
+        await Event.updateOne(
+            { _id: existing._id },
+            {
+                $set: {
+                    companyName: data.companyName,
+                    roleTitle: data.roleTitle,
+                    eventType: data.eventType,
+                    status,
+                    aiSummary: data.aiSummary,
+                    receivedAt,
+                    threadId: data.threadId,
+                    provider: data.provider,
+                    inboxEmail: data.inboxEmail,
+                    messageId: data.messageId,
+                },
+            }
+        );
+
+        if (data.scheduledItems && data.scheduledItems.length > 0) {
+            for (const item of data.scheduledItems) {
+                try {
+                    await ScheduledItem.create({
+                        userId,
+                        eventId: existing._id,
+                        applicationId: undefined,
+                        type: item.type,
+                        title: item.title,
+                        startAt: new Date(item.startAt),
+                        endAt: item.endAt ? new Date(item.endAt) : undefined,
+                        duration: item.duration,
+                        timezone: "America/Toronto",
+                        links: item.links ?? [],
+                        notes: item.notes,
+                        companyName: item.companyName ?? data.companyName,
+                        roleTitle: data.roleTitle,
+                        source: "auto",
+                        sourceMeta: {
+                            provider: data.provider,
+                            inboxEmail: data.inboxEmail,
+                            messageId: data.messageId,
+                            threadId: data.threadId ?? data.messageId,
+                        },
+                    });
+                } catch (err: unknown) {
+                    const isDuplicate = err && typeof err === "object" && "code" in err && (err as { code?: number }).code === 11000;
+                    if (isDuplicate) {
+                        console.log(
+                            `[Ingest] Skipping duplicate ScheduledItem messageId=${data.messageId} type=${item.type} startAt=${item.startAt}`
+                        );
+                    } else {
+                        throw err;
+                    }
+                }
+            }
+        }
+
         return { event: existing, userId };
     }
-
-    const status = statusFromEventType(data.eventType, data.status as ApplicationStatus);
     const event = await Event.create({
         userId,
         companyName: data.companyName,
@@ -304,6 +361,17 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
     if (!event) throw new Error("Event not found");
     if (event.assignmentStatus === "assigned") {
         console.log("Event already assigned:", eventId);
+        // If the Event was assigned earlier but ScheduledItems were created later (e.g. ingest retries),
+        // backfill ScheduledItem.applicationId so calendar/reminders become visible.
+        if (event.applicationId) {
+            await ScheduledItem.updateMany(
+                {
+                    eventId,
+                    $or: [{ applicationId: null }, { applicationId: { $exists: false } }],
+                },
+                { $set: { applicationId: event.applicationId } }
+            );
+        }
         return;
     }
 

@@ -1,13 +1,21 @@
 import { Queue } from "bullmq";
-import IORedis from "ioredis";
 
-export const connection = {
-    host: new URL(process.env.REDIS_URL!).hostname,
-    port: parseInt(new URL(process.env.REDIS_URL!).port || "6379"),
-    password: new URL(process.env.REDIS_URL!).password || undefined
-};
+const redisUrl = process.env.REDIS_URL!;
+
+export const connection = (() => {
+  const u = new URL(redisUrl);
+  return {
+    host: u.hostname,
+    port: parseInt(u.port || "6379", 10),
+    username: u.username ? decodeURIComponent(u.username) : undefined,
+    password: u.password ? decodeURIComponent(u.password) : undefined,
+    maxRetriesPerRequest: null,
+    tls: redisUrl.startsWith("rediss://") ? {} : undefined,
+  };
+})();
 
 export const llmQueue = new Queue("llm_queue", {
   connection: connection,
 });
+
 

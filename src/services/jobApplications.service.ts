@@ -87,6 +87,10 @@ export interface ApplicationEventItem {
   status: string;
   receivedAt: string;
   aiSummary?: string;
+  provider?: "gmail" | "outlook";
+  inboxEmail?: string;
+  messageId?: string;
+  threadId?: string;
 }
 
 export async function getApplicationEventsService(
@@ -112,5 +116,9 @@ export async function getApplicationEventsService(
     status: doc.status,
     receivedAt: doc.receivedAt.toISOString(),
     aiSummary: doc.aiSummary,
+    provider: doc.provider,
+    inboxEmail: doc.inboxEmail,
+    messageId: doc.messageId,
+    threadId: doc.threadId,
   }));
 }

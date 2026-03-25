@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import type { DashboardResponse } from "../types/dashboard.types";
 import { User } from "../models/User";
 import { UserDashboardStats } from "../models/UserDashboardStats";
+import { Application } from "../models/Application";
 import { ScheduledItem } from "../models/ScheduledItem"
 import { UserDailyStats } from "../models/UserDailyStats";
 
@@ -56,12 +57,15 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     end.setDate(end.getDate() + 1);
 
     const userIdObj = new mongoose.Types.ObjectId(userId);
-    const [statsDoc, upcomingItems, todayItems, dailyStats, userDoc] = await Promise.all([
+    const [statsDoc, upcomingItems, todayItems, dailyStats, userDoc, totalApps] = await Promise.all([
         UserDashboardStats.findOne({ userId }).lean(),
         ScheduledItem.find({ userId: userIdObj, startAt: { $gte: now } }).sort({ startAt: 1 }).limit(10).lean(),
         ScheduledItem.find({ userId: userIdObj, startAt: { $gte: start, $lt: end } }).sort({ startAt: 1}).lean(),
         UserDailyStats.find({ userId }).sort({ date: 1 }).limit(90).lean(),
         User.findById(userId).select("connectedInboxes").lean(),
+        // "Total Applications" should be stable regardless of repeated email ingest;
+        // it should represent distinct Application documents.
+        Application.countDocuments({ userId: userIdObj }),
     ])
 
     console.log(upcomingItems);
@@ -119,7 +123,8 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const offers = getStatusCount(statsDoc?.countsByStatus, "OFFER");
     const rejected = getStatusCount(statsDoc?.countsByStatus, "REJECTED");
 
-    const total = applied + oas + interviews + offers + rejected;
+    // Stable distinct-application total.
+    const total = totalApps;
 
     const active = statsDoc?.activeCount ?? 0;
 
