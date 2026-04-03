@@ -41,8 +41,21 @@ const ingestEventJsonSchema = {
     },
     eventType: {
       type: "string",
-      enum: ["OA", "INTERVIEW", "OFFER", "REJECTION", "ACKNOWLEDGEMENT", "RESCHEDULE", "OTHER_UPDATE"],
-      description: "Broad category: ACKNOWLEDGEMENT (application received), OA, INTERVIEW, OFFER, REJECTION, RESCHEDULE (rescheduling existing meeting), OTHER_UPDATE",
+      enum: [
+        "OA",
+        "INTERVIEW",
+        "OFFER",
+        "REJECTION",
+        "ACKNOWLEDGEMENT",
+        "RESCHEDULE",
+        "UPDATE",
+        "ACTION_REQUIRED",
+        "OTHER_UPDATE",
+        "CANCELLATION",
+        "STAGE_ROLLBACK",
+      ],
+      description:
+        "Broad category: ACKNOWLEDGEMENT (application received), OA, INTERVIEW, OFFER, REJECTION, RESCHEDULE (rescheduling an existing meeting), UPDATE (non-stage informational update), ACTION_REQUIRED (generic required user action), OTHER_UPDATE (legacy alias of UPDATE), CANCELLATION (explicitly cancelled/rescinded OA/interview), STAGE_ROLLBACK (explicit stage rollback)",
     },
     aiSummary: {
       type: "string",
@@ -50,8 +63,11 @@ const ingestEventJsonSchema = {
     },
     scheduledItems: {
       type: "array",
+      description:
+        "One entry per distinct OA/interview start time. If the email lists multiple times (e.g. two sessions, two rounds, different days), output that many objects—never merge into one.",
       items: {
         type: "object",
+        description: "A single OA or interview calendar slot.",
         properties: {
           type: {
             type: "string",
@@ -59,6 +75,7 @@ const ingestEventJsonSchema = {
           },
           title: {
             type: "string",
+            description: 'e.g. "Interview session 1", "Round 2"',
           },
           startAt: {
             type: "string",
@@ -109,7 +126,7 @@ function statusToEventType(status: string): EventPayload["eventType"] {
     OFFER: "OFFER",
     REJECTED: "REJECTION",
   };
-  return m[status] ?? "OTHER_UPDATE";
+  return m[status] ?? "UPDATE";
 }
 
 /** Map eventType to pipeline status so Application advances correctly (eventType is source of truth for stage) */
@@ -142,6 +159,8 @@ export async function extractJobEventFromEmail(email: EmailData): Promise<EventP
 2. If it's NOT job-related, set isJobRelated to false
 3. If it IS job-related, set isJobRelated to true and extract ALL required fields
 
+CRITICAL: If the subject line clearly concerns a job pipeline (e.g. company name + "Application", "Interview", "Next Steps", "Assessment", "Offer", "Rejection", "OA"), set isJobRelated=true even when the Email Body is empty or missing—this often happens with forwards or MIME quirks. Infer company from the subject when needed (e.g. "Your IBM Application" → IBM).
+
 Job-related emails include:
 - Interview invitations/scheduling (status: INTERVIEW)
 - Online assessment (OA) invitations (status: OA)
@@ -154,8 +173,12 @@ IMPORTANT: If the email mentions scheduling an interview, it IS job-related. Ext
 - Company name: Extract from email (sender domain, email content, or company mentioned)
 - Role title: Extract if mentioned, otherwise use "Software Engineer" or similar based on context
 - Status: Must be one of: APPLIED, OA, INTERVIEW, OFFER, REJECTED
-- eventType: One of OA, INTERVIEW, OFFER, REJECTION, ACKNOWLEDGEMENT, RESCHEDULE, OTHER_UPDATE (use RESCHEDULE when email is rescheduling an existing interview/OA)
-- Scheduled items: Extract interviews/OAs with dates/times
+- eventType: One of OA, INTERVIEW, OFFER, REJECTION, ACKNOWLEDGEMENT, RESCHEDULE, UPDATE, ACTION_REQUIRED, OTHER_UPDATE, CANCELLATION, STAGE_ROLLBACK
+- Prefer UPDATE for non-stage informational updates (e.g. "OA completed, we'll get back to you", "reschedule confirmed")
+- Prefer ACTION_REQUIRED when user must do a general action that doesn't fit OA/INTERVIEW (e.g. verify email, upload transcript, submit profile/documents, pick new time link without explicit interview scheduling context)
+- Use RESCHEDULE only when the email explicitly changes schedule/time for an existing OA/interview
+- Use OTHER_UPDATE only as a legacy fallback; prefer UPDATE
+- Scheduled items: Extract interviews/OAs with dates/times. If the email gives multiple distinct times (including two sessions on the same day), output multiple scheduledItems—one per time. Do not collapse two times into one item.
 - AI summary: Brief summary of the email content
 
 DATE PARSING RULES:
@@ -175,7 +198,9 @@ Email From: ${email.from}
 Email Body:
 ${email.body}
 
-Extract job application information from this email. If it's not job-related, set isJobRelated to false.`;
+Extract job application information from this email. If it's not job-related, set isJobRelated to false.
+
+If multiple interview/OA times appear, scheduledItems must have one entry per distinct start time.`;
 
   try {
     const completion = await openai.chat.completions.create({

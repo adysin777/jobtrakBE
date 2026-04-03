@@ -1,0 +1,31 @@
+[
+  {
+    "name": "InterviewCancelledRollback",
+    "email": {
+      "subject": "Interview cancelled — we'll be in touch",
+      "from": "Recruiting Team <recruiting@example.com>",
+      "body": "Hi there, unfortunately we need to cancel your interview scheduled for Friday. We will follow up with next steps soon.",
+      "userEmail": "user@example.com",
+      "provider": "gmail",
+      "inboxEmail": "user@example.com",
+      "messageId": "fixture-message-1",
+      "threadId": "fixture-thread-1",
+      "receivedAt": "2026-04-01T12:00:00Z"
+    }
+  },
+  {
+    "name": "OaCompletionUpdateNoStageChange",
+    "email": {
+      "subject": "Thanks for completing your online assessment",
+      "from": "Careers <careers@company.com>",
+      "body": "Thanks for completing the assessment. Our team will review your results and get back to you.",
+      "userEmail": "user@example.com",
+      "provider": "gmail",
+      "inboxEmail": "user@example.com",
+      "messageId": "fixture-message-2",
+      "threadId": "fixture-thread-2",
+      "receivedAt": "2026-04-01T13:00:00Z"
+    }
+  }
+]
+

@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import { User } from "../models/User";
 import { llmQueue } from "../queue/llmQueue";
 import { renewGmailWatchIfNeeded } from "./inboxes.service";
+import { extractGmailMessageText } from "../utils/gmailPayloadText";
 
 const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -176,17 +177,7 @@ export async function processGmailWebhookPush(body: PubSubPushBody): Promise<voi
             const from = getHeader("from");
             const date = getHeader("date");
 
-            let bodyText = "";
-            if (payloadMsg?.body?.data) {
-                bodyText = Buffer.from(payloadMsg.body.data, "base64").toString("utf-8");
-            } else if (payloadMsg?.parts) {
-                for (const part of payloadMsg.parts) {
-                    if (part.body?.data && part.mimeType === "text/plain") {
-                        bodyText = Buffer.from(part.body.data, "base64").toString("utf-8");
-                        break;
-                    }
-                }
-            }
+            const bodyText = extractGmailMessageText(payloadMsg);
 
             if (!isJobRelated(subject, bodyText)) continue;
 

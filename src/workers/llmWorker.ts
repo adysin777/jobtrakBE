@@ -2,10 +2,12 @@ import "dotenv/config";
 import { Worker } from "bullmq";
 import { connection } from "../queue/llmQueue";
 import { extractJobEventFromEmail } from "../services/llmExtraction.service";
+import { agentExtractJobEventFromEmail } from "../services/llmAgent.service";
 import { config } from "../config/env";
 
 async function postIngest(payload: any) {
-    const res = await fetch(`${config.backendUrl}/api/ingest/job-event`, {
+    const url = `${config.backendUrl}/api/ingest/job-event`;
+    const res = await fetch(url, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -16,12 +18,18 @@ async function postIngest(payload: any) {
 
     if (!res.ok) {
         const txt = await res.text();
-        throw new Error(`Ingest failed: ${res.status} ${txt}`);
+        throw new Error(`Ingest failed (${url}): ${res.status} ${txt}`);
     }
+
+    const body = await res.json().catch(() => ({}));
+    console.log("📥 Ingest OK:", body);
 }
 
 async function processJobEvent(raw: any) {
-    const payload = await extractJobEventFromEmail({
+    const useAgent = String(process.env.LLM_AGENT_ENABLED || "").toLowerCase() === "true";
+    const extractor = useAgent ? agentExtractJobEventFromEmail : extractJobEventFromEmail;
+
+    const payload = await extractor({
         subject: raw.subject || "",
         body: raw.body || "",
         from: raw.from || "",
@@ -46,6 +54,9 @@ async function processJobEvent(raw: any) {
 }
 
 async function main() {
+    const agentEnabled = String(process.env.LLM_AGENT_ENABLED || "").toLowerCase() === "true";
+    console.log(`[llmWorker] LLM_AGENT_ENABLED=${agentEnabled} BACKEND_URL=${config.backendUrl}`);
+
     const worker = new Worker(
         "llm_queue",
         async (job) => {

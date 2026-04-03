@@ -61,7 +61,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         UserDashboardStats.findOne({ userId }).lean(),
         ScheduledItem.find({ userId: userIdObj, startAt: { $gte: now } }).sort({ startAt: 1 }).limit(10).lean(),
         ScheduledItem.find({ userId: userIdObj, startAt: { $gte: start, $lt: end } }).sort({ startAt: 1}).lean(),
-        UserDailyStats.find({ userId }).sort({ date: 1 }).limit(90).lean(),
+        UserDailyStats.find({ userId }).sort({ day: 1 }).limit(450).lean(),
         User.findById(userId).select("connectedInboxes").lean(),
         // "Total Applications" should be stable regardless of repeated email ingest;
         // it should represent distinct Application documents.
@@ -149,10 +149,17 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         role: x.roleTitle ?? undefined,
     }));
 
-    const graph: DashboardResponse["graph"] = (dailyStats ?? []).map((d: any) => ({
-        date: typeof d.date === "string" ? d.date : ymd(d.date),
-        appliedCount: d.appliedCount ?? 0,
-    }));
+    const graph: DashboardResponse["graph"] = (dailyStats ?? []).map((d: any) => {
+        const dayStr = typeof d.day === "string" ? d.day : ymd(d.day);
+        return {
+            date: dayStr,
+            appliedCount: d.appliedCount ?? 0,
+            oaCount: d.oaCount ?? 0,
+            interviewCount: d.interviewCount ?? 0,
+            offerCount: d.offerCount ?? 0,
+            rejectionCount: d.rejectionCount ?? 0,
+        };
+    });
 
     const calendarMonth : DashboardResponse["calendarMonth"] = {
         month: month,

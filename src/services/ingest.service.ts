@@ -56,6 +56,9 @@ export async function ingestJobEventService(data: any): Promise<void> {
     const companyNorm = normalize(event.companyName);
     const titleNorm = normalize(event.roleTitle);
 
+    const priorApplication = await Application.findOne({ userId, companyNorm, titleNorm }).lean();
+    const isNewApplication = !priorApplication;
+
     const application = await Application.findOneAndUpdate(
         { userId, companyNorm, titleNorm },
         {
@@ -96,15 +99,25 @@ export async function ingestJobEventService(data: any): Promise<void> {
         { upsert: true }
     );
 
-    const dailyStatField = event.status === "OA" ? "oaCount" :
-                        event.status === "INTERVIEW" ? "interviewCount" :
-                        event.status === "OFFER" ? "offerCount" :
-                        event.status === "REJECTED" ? "rejectionCount" :
-                        "appliedCount";
+    const dailyInc: Record<string, number> = {};
+    if (isNewApplication) {
+        dailyInc.appliedCount = 1;
+        if (event.status === "OA") dailyInc.oaCount = 1;
+        else if (event.status === "INTERVIEW") dailyInc.interviewCount = 1;
+        else if (event.status === "OFFER") dailyInc.offerCount = 1;
+        else if (event.status === "REJECTED") dailyInc.rejectionCount = 1;
+    } else {
+        const dailyStatField = event.status === "OA" ? "oaCount" :
+                            event.status === "INTERVIEW" ? "interviewCount" :
+                            event.status === "OFFER" ? "offerCount" :
+                            event.status === "REJECTED" ? "rejectionCount" :
+                            "appliedCount";
+        dailyInc[dailyStatField] = 1;
+    }
 
     await UserDailyStats.findOneAndUpdate(
         { userId, day: today },
-        { $inc: { [dailyStatField]: 1 } },
+        { $inc: dailyInc },
         { upsert: true }
         );
 

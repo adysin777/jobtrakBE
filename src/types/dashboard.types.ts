@@ -21,6 +21,10 @@ export interface DashboardResponse {
     graph: Array<{
         date: string;
         appliedCount: number;
+        oaCount: number;
+        interviewCount: number;
+        offerCount: number;
+        rejectionCount: number;
     }>;
     calendarMonth: {
         month: string;

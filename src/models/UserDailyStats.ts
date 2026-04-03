@@ -36,6 +36,11 @@ const userDailyStatsSchema = new Schema<IUserDailyStats>(
             required: true,
             default: 0,
         },
+        oaCount: {
+            type: Number,
+            required: true,
+            default: 0,
+        },
         interviewCount: {
             type: Number,
             required: true,

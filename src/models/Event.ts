@@ -15,7 +15,11 @@ export type EventType =
     | "REJECTION"
     | "ACKNOWLEDGEMENT"
     | "RESCHEDULE"
-    | "OTHER_UPDATE";
+    | "UPDATE"
+    | "ACTION_REQUIRED"
+    | "OTHER_UPDATE"
+    | "CANCELLATION"
+    | "STAGE_ROLLBACK";
 
 export type EventAssignmentStatus = "unprocessed" | "assigned" | "conflict";
 
@@ -24,7 +28,7 @@ export interface IEvent extends Document {
 
     companyName: string;
     roleTitle: string;
-    /** Broad category: what kind of thing happened (ACKNOWLEDGEMENT, OA, INTERVIEW, OFFER, REJECTION, RESCHEDULE, OTHER_UPDATE) */
+    /** Broad category: what kind of thing happened (ACKNOWLEDGEMENT, OA, INTERVIEW, OFFER, REJECTION, RESCHEDULE, UPDATE, ACTION_REQUIRED, OTHER_UPDATE) */
     eventType: EventType;
     /** Application pipeline status after this event (for updating Application) */
     status: EventStatus;
@@ -39,6 +43,8 @@ export interface IEvent extends Document {
 
     assignmentStatus: EventAssignmentStatus;
     applicationId?: Types.ObjectId;
+    /** LLM/agent hint for assignment (validated in assignEventToApplication). */
+    suggestedApplicationId?: Types.ObjectId;
 
     createdAt: Date;
     updatedAt: Date;
@@ -56,7 +62,19 @@ const eventSchema = new Schema<IEvent>(
         roleTitle: { type: String, required: true, trim: true },
         eventType: {
             type: String,
-            enum: ["OA", "INTERVIEW", "OFFER", "REJECTION", "ACKNOWLEDGEMENT", "RESCHEDULE", "OTHER_UPDATE"],
+            enum: [
+                "OA",
+                "INTERVIEW",
+                "OFFER",
+                "REJECTION",
+                "ACKNOWLEDGEMENT",
+                "RESCHEDULE",
+                "UPDATE",
+                "ACTION_REQUIRED",
+                "OTHER_UPDATE",
+                "CANCELLATION",
+                "STAGE_ROLLBACK",
+            ],
             required: true,
             index: true,
         },
@@ -83,6 +101,11 @@ const eventSchema = new Schema<IEvent>(
             type: Schema.Types.ObjectId,
             ref: "Application",
             default: null,
+            index: true,
+        },
+        suggestedApplicationId: {
+            type: Schema.Types.ObjectId,
+            ref: "Application",
             index: true,
         },
     },

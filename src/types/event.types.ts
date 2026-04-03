@@ -8,7 +8,11 @@ export const EventTypeSchema = z.enum([
     "REJECTION",
     "ACKNOWLEDGEMENT",
     "RESCHEDULE",
+    "UPDATE",
+    "ACTION_REQUIRED",
     "OTHER_UPDATE",
+    "CANCELLATION",
+    "STAGE_ROLLBACK",
 ]);
 export type EventType = z.infer<typeof EventTypeSchema>;
 
@@ -32,12 +36,16 @@ export type EventScheduledItem = z.infer<typeof EventScheduledItemSchema>;
 export const EventAssignmentStatus = z.enum(["unprocessed", "assigned", "conflict"]);
 export type EventAssignmentStatus = z.infer<typeof EventAssignmentStatus>;
 
+const mongoObjectIdString = z.string().regex(/^[a-fA-F0-9]{24}$/, "Invalid ObjectId");
+
 /**
  * Event payload as produced by LLM extraction (and optionally enriched with userId, etc.).
  * Used to create Event documents; assignment to applications happens later.
  */
 export const EventPayloadSchema = z.object({
     userId: z.string().optional(), // set by worker after user lookup
+    /** When set by the agent path, backend may assign this event to this application after validation. */
+    suggestedApplicationId: mongoObjectIdString.optional(),
     userEmail: z.string().email(),
     provider: z.enum(["gmail", "outlook"]),
     inboxEmail: z.string().email(),

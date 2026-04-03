@@ -3,6 +3,7 @@ import { User } from "../models/User";
 import { llmQueue } from "../queue/llmQueue";
 import { config } from "../config/env";
 import { renewGmailWatchIfNeeded } from "./inboxes.service";
+import { extractGmailMessageText } from "../utils/gmailPayloadText";
 
 const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -42,19 +43,7 @@ function getHeader(
 }
 
 function extractBodyText(payloadMsg: any): string {
-    if (payloadMsg?.body?.data) {
-        return Buffer.from(payloadMsg.body.data, "base64").toString("utf-8");
-    }
-
-    if (payloadMsg?.parts) {
-        for (const part of payloadMsg.parts) {
-            if (part.body?.data && part.mimeType === "text/plain") {
-                return Buffer.from(part.body.data, "base64").toString("utf-8");
-            }
-        }
-    }
-
-    return "";
+    return extractGmailMessageText(payloadMsg);
 }
 
 async function refreshAccessTokenIfNeeded(user: any, inboxIndex: number): Promise<string | null> {

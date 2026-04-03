@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "seed:dev": "ts-node src/scripts/seedDev.ts",
+    "llm:fixture": "ts-node src/scripts/runLlmAgentFixture.ts",
     "tunnel": "ngrok http 3000",
     "worker:llm": "ts-node src/workers/llmWorker.ts"
   },
