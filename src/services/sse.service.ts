@@ -5,6 +5,12 @@ const connections = new Map<string, Set<Response>>();
 
 const HEARTBEAT_INTERVAL_MS = 25_000;
 
+type DashboardUpdatePayload = {
+    applicationId?: string;
+    companyName?: string;
+    eventType?: string;
+};
+
 /**
  * Register an SSE connection for a user. Sends heartbeat periodically; caller must call
  * removeConnection when the response closes or errors.
@@ -45,10 +51,10 @@ export function removeConnection(userId: string, res: Response): void {
  * Notify all open SSE connections for this user that dashboard data changed.
  * Call after: ingest (event assigned), inbox connected, etc.
  */
-export function notifyDashboardUpdate(userId: string): void {
+export function notifyDashboardUpdate(userId: string, update?: DashboardUpdatePayload): void {
     const set = connections.get(userId);
     if (!set || set.size === 0) return;
-    const payload = JSON.stringify({ type: "dashboard_invalidate" });
+    const payload = JSON.stringify({ type: "dashboard_invalidate", ...update });
     for (const res of set) {
         if (!res.writableEnded) {
             res.write(`data: ${payload}\n\n`);

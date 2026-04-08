@@ -4,6 +4,7 @@ import { EventPayloadSchema } from "../types/event.types";
 import { createEventFromPayload, assignEventToApplication } from "../services/event.service";
 import { notifyDashboardUpdate } from "../services/sse.service";
 import { buildLlmRoutingContextForEmail } from "../services/ingestContext.service";
+import { Event } from "../models/Event";
 
 /** Accepts EventPayload (from LLM worker). Backend owns DB: create Event + assign to Application. */
 export async function ingestJobEvent(req: Request, res: Response) {
@@ -11,7 +12,12 @@ export async function ingestJobEvent(req: Request, res: Response) {
         const payload = EventPayloadSchema.parse(req.body);
         const { event, userId } = await createEventFromPayload(payload);
         await assignEventToApplication(event._id as any);
-        notifyDashboardUpdate(userId.toString());
+        const assignedEvent = await Event.findById(event._id).select({ applicationId: 1 }).lean();
+        notifyDashboardUpdate(userId.toString(), {
+            applicationId: assignedEvent?.applicationId ? String(assignedEvent.applicationId) : undefined,
+            companyName: event.companyName,
+            eventType: event.eventType,
+        });
         return res.json({ ok: true, eventId: (event as any)._id?.toString() });
     } catch (error) {
         console.error("Ingest error:", error);
