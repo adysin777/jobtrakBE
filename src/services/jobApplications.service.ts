@@ -1,5 +1,6 @@
 import { Application, type IApplication } from "../models/Application";
 import { Event } from "../models/Event";
+import { ScheduledItem } from "../models/ScheduledItem";
 import mongoose, { type QueryFilter } from "mongoose";
 
 export type ListStatusFilter =
@@ -81,6 +82,17 @@ export async function listApplicationsService(
   }));
 }
 
+export interface ApplicationEventScheduledItem {
+  id: string;
+  type: "OA" | "INTERVIEW";
+  title: string;
+  startAt: string;
+  endAt?: string;
+  timezone: string;
+  notes?: string;
+  links: { label: string; url: string }[];
+}
+
 export interface ApplicationEventItem {
   id: string;
   eventType: string;
@@ -91,6 +103,7 @@ export interface ApplicationEventItem {
   inboxEmail?: string;
   messageId?: string;
   threadId?: string;
+  scheduledItems?: ApplicationEventScheduledItem[];
 }
 
 export async function getApplicationEventsService(
@@ -110,15 +123,51 @@ export async function getApplicationEventsService(
     .sort({ receivedAt: 1 })
     .lean();
 
-  return events.map((doc: any) => ({
-    id: doc._id.toString(),
-    eventType: doc.eventType,
-    status: doc.status,
-    receivedAt: doc.receivedAt.toISOString(),
-    aiSummary: doc.aiSummary,
-    provider: doc.provider,
-    inboxEmail: doc.inboxEmail,
-    messageId: doc.messageId,
-    threadId: doc.threadId,
-  }));
+  const eventIds = events.map((doc: any) => doc._id);
+  const scheduledDocs =
+    eventIds.length === 0
+      ? []
+      : await ScheduledItem.find({
+          userId: userObjId,
+          eventId: { $in: eventIds },
+        })
+          .sort({ startAt: 1 })
+          .lean();
+
+  const scheduledByEventId = new Map<string, typeof scheduledDocs>();
+  for (const row of scheduledDocs) {
+    const eid = (row as any).eventId?.toString();
+    if (!eid) continue;
+    const list = scheduledByEventId.get(eid);
+    if (list) list.push(row as any);
+    else scheduledByEventId.set(eid, [row as any]);
+  }
+
+  return events.map((doc: any) => {
+    const sid = doc._id.toString();
+    const items = scheduledByEventId.get(sid) ?? [];
+    const scheduledItems: ApplicationEventScheduledItem[] = items.map((si: any) => ({
+      id: si._id.toString(),
+      type: si.type,
+      title: si.title,
+      startAt: si.startAt.toISOString(),
+      endAt: si.endAt ? si.endAt.toISOString() : undefined,
+      timezone: si.timezone,
+      notes: si.notes,
+      links: Array.isArray(si.links) ? si.links : [],
+    }));
+
+    return {
+      id: sid,
+      eventType: doc.eventType,
+      status: doc.status,
+      receivedAt: doc.receivedAt.toISOString(),
+      aiSummary: doc.aiSummary,
+      provider: doc.provider,
+      inboxEmail: doc.inboxEmail,
+      messageId: doc.messageId,
+      threadId: doc.threadId,
+      ...(scheduledItems.length > 0 ? { scheduledItems } : {}),
+    };
+  });
 }
