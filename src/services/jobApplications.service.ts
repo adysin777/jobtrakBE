@@ -25,7 +25,8 @@ export type ListStatusFilter =
   | "OA"
   | "interview"
   | "offer"
-  | "rejection";
+  | "rejection"
+  | "archived";
 
 export type ListTimeRange =
   | "all"
@@ -45,10 +46,10 @@ export interface ApplicationListItem {
   roleTitle: string;
   status: string;
   appliedAt: string;
+  archived: boolean;
 }
 
-const statusMap: Record<ListStatusFilter, string[] | null> = {
-  all: null,
+const statusMap: Record<Exclude<ListStatusFilter, "all" | "archived">, string[]> = {
   active: ["APPLIED", "OA", "INTERVIEW"], // anything not offer/rejection
   OA: ["OA"],
   interview: ["INTERVIEW"],
@@ -64,9 +65,14 @@ export async function listApplicationsService(
     userId: new mongoose.Types.ObjectId(userId),
   };
 
-  if (params.status && params.status !== "all") {
-    const statuses = statusMap[params.status];
-    if (statuses) query.status = { $in: statuses };
+  if (params.status === "archived") {
+    query.archived = true;
+  } else {
+    query.archived = { $ne: true };
+    if (params.status && params.status !== "all") {
+      const statuses = statusMap[params.status as keyof typeof statusMap];
+      if (statuses) query.status = { $in: statuses };
+    }
   }
 
   if (params.timeRange && params.timeRange !== "all") {
@@ -95,6 +101,7 @@ export async function listApplicationsService(
     roleTitle: doc.roleTitle,
     status: doc.status,
     appliedAt: doc.appliedAt.toISOString(),
+    archived: Boolean((doc as any).archived),
   }));
 }
 
@@ -193,6 +200,7 @@ export interface PatchApplicationInput {
   roleTitle?: string;
   appliedAt?: string;
   status?: ApplicationStatus;
+  archived?: boolean;
 }
 
 export async function patchApplicationForUser(
@@ -223,9 +231,12 @@ export async function patchApplicationForUser(
     app.isActive = patch.status !== "REJECTED";
     app.statusUpdatedAt = new Date();
   }
+  if (patch.archived !== undefined) {
+    app.archived = patch.archived;
+  }
 
   await app.save();
-  notifyDashboardUpdate(userId);
+  notifyDashboardUpdate(userId, { internal: true });
 
   return {
     id: (app._id as mongoose.Types.ObjectId).toString(),
@@ -233,6 +244,7 @@ export async function patchApplicationForUser(
     roleTitle: app.roleTitle,
     status: app.status,
     appliedAt: app.appliedAt.toISOString(),
+    archived: Boolean(app.archived),
   };
 }
 
@@ -273,7 +285,7 @@ export async function patchApplicationEventForUser(
   }
 
   await event.save();
-  notifyDashboardUpdate(userId);
+  notifyDashboardUpdate(userId, { internal: true });
 
   const events = await getApplicationEventsService(userId, applicationId);
   return events.find((e) => e.id === eventId) ?? null;

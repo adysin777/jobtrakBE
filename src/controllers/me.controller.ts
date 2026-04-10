@@ -28,6 +28,7 @@ export async function getPlan(req: Request, res: Response) {
     const maxTracked = getMaxTrackedApplications(user.plan, user.planActiveUntil ?? null);
     const trackedCount = await Application.countDocuments({
       userId: user._id,
+      archived: { $ne: true },
     });
     const info: PlanInfo = {
       plan: user.plan,

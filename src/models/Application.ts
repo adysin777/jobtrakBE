@@ -26,6 +26,9 @@ export interface IApplication extends Document {
 
     isActive: boolean;
 
+    /** Hidden from dashboard, calendar, and plan counts; listed only under Archived on Applications page. */
+    archived: boolean;
+
     userNotes?: string;
 
     aiSummary?: string;
@@ -112,6 +115,8 @@ const applicationSchema = new Schema<IApplication>(
 
         isActive: { type: Boolean, required: true, default: true, index: true },
 
+        archived: { type: Boolean, required: true, default: false, index: true },
+
         userNotes: { type: String, trim: true },
 
         aiSummary: { type: String, trim: true },
@@ -128,6 +133,7 @@ applicationSchema.index({ userId: 1, status: 1, lastEventAt: -1 });
 applicationSchema.index({ userId: 1, companyNorm: 1, titleNorm: 1 });
 applicationSchema.index({ userId: 1, "source.threadId": 1 }); // same thread = same application
 applicationSchema.index({ userId: 1, appliedAt: -1 });
+applicationSchema.index({ userId: 1, archived: 1, appliedAt: -1 });
 
 export const Application = mongoose.model<IApplication>("Application", applicationSchema);
 

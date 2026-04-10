@@ -9,6 +9,8 @@ type DashboardUpdatePayload = {
     applicationId?: string;
     companyName?: string;
     eventType?: string;
+    /** User-initiated edits: clients should not show the top-right company update toast. */
+    internal?: boolean;
 };
 
 /**

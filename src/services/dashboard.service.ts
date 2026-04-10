@@ -27,6 +27,23 @@ function ymd(d: Date | string | null | undefined): string {
     return dateObj.toISOString().slice(0, 10);
 }
 
+/** Scheduled items tied only to archived applications are hidden from dashboard calendar/upcoming. */
+async function archivedApplicationIds(userIdObj: mongoose.Types.ObjectId): Promise<mongoose.Types.ObjectId[]> {
+  const rows = await Application.find({ userId: userIdObj, archived: true }).select("_id").lean();
+  return rows.map((r) => (r as { _id: mongoose.Types.ObjectId })._id);
+}
+
+function scheduledItemMatchExcludingArchived(
+  base: Record<string, unknown>,
+  archivedIds: mongoose.Types.ObjectId[]
+): Record<string, unknown> {
+  if (archivedIds.length === 0) return base;
+  return {
+    ...base,
+    $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }],
+  };
+}
+
 function getStatusCount(counts: unknown, status: ApplicationStatus): number {
     if (!counts) return 0;
 
@@ -57,27 +74,41 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     end.setDate(end.getDate() + 1);
 
     const userIdObj = new mongoose.Types.ObjectId(userId);
+    const archivedIds = await archivedApplicationIds(userIdObj);
+
+    const upcomingMatch = scheduledItemMatchExcludingArchived(
+        { userId: userIdObj, startAt: { $gte: now } },
+        archivedIds
+    );
+    const todayMatch = scheduledItemMatchExcludingArchived(
+        { userId: userIdObj, startAt: { $gte: start, $lt: end } },
+        archivedIds
+    );
+
     const [statsDoc, upcomingItems, todayItems, dailyStats, userDoc, totalApps] = await Promise.all([
         UserDashboardStats.findOne({ userId }).lean(),
-        ScheduledItem.find({ userId: userIdObj, startAt: { $gte: now } }).sort({ startAt: 1 }).limit(10).lean(),
-        ScheduledItem.find({ userId: userIdObj, startAt: { $gte: start, $lt: end } }).sort({ startAt: 1}).lean(),
+        ScheduledItem.find(upcomingMatch).sort({ startAt: 1 }).limit(10).lean(),
+        ScheduledItem.find(todayMatch).sort({ startAt: 1}).lean(),
         UserDailyStats.find({ userId }).sort({ day: 1 }).limit(450).lean(),
         User.findById(userId).select("connectedInboxes").lean(),
-        // "Total Applications" should be stable regardless of repeated email ingest;
-        // it should represent distinct Application documents.
-        Application.countDocuments({ userId: userIdObj }),
+        Application.countDocuments({ userId: userIdObj, archived: { $ne: true } }),
     ])
 
     console.log(upcomingItems);
 
     const connectedInboxCount = (userDoc as any)?.connectedInboxes?.filter((i: any) => i.status === "connected").length ?? 0;
 
+    const calendarMatch: Record<string, unknown> = {
+        userId: userIdObj,
+        startAt: { $gte: monthStart, $lt: monthEnd },
+    };
+    if (archivedIds.length > 0) {
+        (calendarMatch as any).$or = [{ applicationId: null }, { applicationId: { $nin: archivedIds } }];
+    }
+
     const calendarDays = await ScheduledItem.aggregate([
         {
-          $match: {
-            userId: userIdObj,
-            startAt: { $gte: monthStart, $lt: monthEnd },
-          },
+          $match: calendarMatch,
         },
         {
           $project: {
@@ -196,10 +227,15 @@ export async function getTimelineForDate(
         return { date: dateStr, items: [] };
     }
     const userIdObj = new mongoose.Types.ObjectId(userId);
-    const items = await ScheduledItem.find({
-        userId: userIdObj,
-        startAt: { $gte: dayStart, $lt: dayEnd },
-    })
+    const archivedIds = await archivedApplicationIds(userIdObj);
+    const dayMatch = scheduledItemMatchExcludingArchived(
+        {
+            userId: userIdObj,
+            startAt: { $gte: dayStart, $lt: dayEnd },
+        },
+        archivedIds
+    );
+    const items = await ScheduledItem.find(dayMatch)
         .sort({ startAt: 1 })
         .lean();
     return {

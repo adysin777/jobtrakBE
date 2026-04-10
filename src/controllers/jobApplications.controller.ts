@@ -17,6 +17,7 @@ const patchApplicationSchema = z
     roleTitle: z.string().trim().min(1).optional(),
     appliedAt: z.string().trim().min(1).optional(),
     status: applicationStatusZ.optional(),
+    archived: z.boolean().optional(),
   })
   .strict()
   .refine((o) => Object.keys(o).length > 0, { message: "At least one field required" });

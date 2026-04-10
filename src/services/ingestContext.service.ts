@@ -92,7 +92,14 @@ export async function buildLlmRoutingContextForEmail(input: BuildLlmRoutingConte
 
   const userId = user._id as mongoose.Types.ObjectId;
 
-  const apps = await Application.find({ userId, isActive: true }).sort({ lastEventAt: -1 }).limit(50).lean();
+  const apps = await Application.find({
+    userId,
+    isActive: true,
+    archived: { $ne: true },
+  })
+    .sort({ lastEventAt: -1 })
+    .limit(50)
+    .lean();
   const companyNormCounts = new Map<string, number>();
   for (const a of apps) {
     const n = a.companyNorm ?? "";

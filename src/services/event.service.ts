@@ -550,7 +550,7 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
         await expireUserPlanIfNeeded(user);
         const maxApps = getMaxTrackedApplications(user.plan, user.planActiveUntil ?? null);
         if (Number.isFinite(maxApps)) {
-            const count = await Application.countDocuments({ userId });
+            const count = await Application.countDocuments({ userId, archived: { $ne: true } });
             if (count >= maxApps) {
                 await markEventConflict(eventId, `application limit reached for user ${userId}: ${count} >= ${maxApps}`);
                 return;
