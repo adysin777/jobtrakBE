@@ -1,7 +1,23 @@
-import { Application, type IApplication } from "../models/Application";
-import { Event } from "../models/Event";
+import { Application, type ApplicationStatus, type IApplication } from "../models/Application";
+import { Event, type EventStatus, type EventType } from "../models/Event";
 import { ScheduledItem } from "../models/ScheduledItem";
 import mongoose, { type QueryFilter } from "mongoose";
+import { notifyDashboardUpdate } from "./sse.service";
+
+function simpleNorm(str: string): string {
+  return str.toLocaleLowerCase().trim();
+}
+
+function getStatusRank(status: ApplicationStatus): number {
+  const rankMap: Record<ApplicationStatus, number> = {
+    APPLIED: 0,
+    OA: 1,
+    INTERVIEW: 2,
+    OFFER: 3,
+    REJECTED: -1,
+  };
+  return rankMap[status];
+}
 
 export type ListStatusFilter =
   | "all"
@@ -170,4 +186,95 @@ export async function getApplicationEventsService(
       ...(scheduledItems.length > 0 ? { scheduledItems } : {}),
     };
   });
+}
+
+export interface PatchApplicationInput {
+  companyName?: string;
+  roleTitle?: string;
+  appliedAt?: string;
+  status?: ApplicationStatus;
+}
+
+export async function patchApplicationForUser(
+  userId: string,
+  applicationId: string,
+  patch: PatchApplicationInput
+): Promise<ApplicationListItem | null> {
+  const appId = new mongoose.Types.ObjectId(applicationId);
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  const app = await Application.findOne({ _id: appId, userId: userObjId });
+  if (!app) return null;
+
+  if (patch.companyName !== undefined) {
+    app.companyName = patch.companyName.trim();
+    app.companyNorm = simpleNorm(patch.companyName);
+  }
+  if (patch.roleTitle !== undefined) {
+    app.roleTitle = patch.roleTitle.trim();
+    app.titleNorm = simpleNorm(patch.roleTitle);
+  }
+  if (patch.appliedAt !== undefined) {
+    app.appliedAt = new Date(patch.appliedAt);
+  }
+  if (patch.status !== undefined) {
+    app.status = patch.status;
+    app.statusRank = getStatusRank(patch.status);
+    app.isActive = patch.status !== "REJECTED";
+    app.statusUpdatedAt = new Date();
+  }
+
+  await app.save();
+  notifyDashboardUpdate(userId);
+
+  return {
+    id: (app._id as mongoose.Types.ObjectId).toString(),
+    companyName: app.companyName,
+    roleTitle: app.roleTitle,
+    status: app.status,
+    appliedAt: app.appliedAt.toISOString(),
+  };
+}
+
+export interface PatchApplicationEventInput {
+  eventType?: EventType;
+  status?: EventStatus;
+  receivedAt?: string;
+  aiSummary?: string | null;
+}
+
+export async function patchApplicationEventForUser(
+  userId: string,
+  applicationId: string,
+  eventId: string,
+  patch: PatchApplicationEventInput
+): Promise<ApplicationEventItem | null> {
+  const appId = new mongoose.Types.ObjectId(applicationId);
+  const eid = new mongoose.Types.ObjectId(eventId);
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  const ownsApp = await Application.exists({ _id: appId, userId: userObjId });
+  if (!ownsApp) return null;
+
+  const event = await Event.findOne({
+    _id: eid,
+    userId: userObjId,
+    applicationId: appId,
+  });
+  if (!event) return null;
+
+  if (patch.eventType !== undefined) event.eventType = patch.eventType;
+  if (patch.status !== undefined) event.status = patch.status;
+  if (patch.receivedAt !== undefined) {
+    event.receivedAt = new Date(patch.receivedAt);
+  }
+  if (patch.aiSummary !== undefined) {
+    event.aiSummary = patch.aiSummary === null || patch.aiSummary === "" ? undefined : patch.aiSummary;
+  }
+
+  await event.save();
+  notifyDashboardUpdate(userId);
+
+  const events = await getApplicationEventsService(userId, applicationId);
+  return events.find((e) => e.id === eventId) ?? null;
 }

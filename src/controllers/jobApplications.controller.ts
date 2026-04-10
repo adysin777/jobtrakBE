@@ -1,5 +1,49 @@
 import { Request, Response } from "express";
-import { listApplicationsService, getApplicationEventsService, type ListStatusFilter, type ListTimeRange } from "../services/jobApplications.service";
+import { z } from "zod";
+import {
+  listApplicationsService,
+  getApplicationEventsService,
+  patchApplicationForUser,
+  patchApplicationEventForUser,
+  type ListStatusFilter,
+  type ListTimeRange,
+} from "../services/jobApplications.service";
+
+const applicationStatusZ = z.enum(["APPLIED", "OA", "INTERVIEW", "OFFER", "REJECTED"]);
+
+const patchApplicationSchema = z
+  .object({
+    companyName: z.string().trim().min(1).optional(),
+    roleTitle: z.string().trim().min(1).optional(),
+    appliedAt: z.string().trim().min(1).optional(),
+    status: applicationStatusZ.optional(),
+  })
+  .strict()
+  .refine((o) => Object.keys(o).length > 0, { message: "At least one field required" });
+
+const eventTypeZ = z.enum([
+  "OA",
+  "INTERVIEW",
+  "OFFER",
+  "REJECTION",
+  "ACKNOWLEDGEMENT",
+  "RESCHEDULE",
+  "UPDATE",
+  "ACTION_REQUIRED",
+  "OTHER_UPDATE",
+  "CANCELLATION",
+  "STAGE_ROLLBACK",
+]);
+
+const patchEventSchema = z
+  .object({
+    eventType: eventTypeZ.optional(),
+    status: applicationStatusZ.optional(),
+    receivedAt: z.string().trim().min(1).optional(),
+    aiSummary: z.string().nullable().optional(),
+  })
+  .strict()
+  .refine((o) => Object.keys(o).length > 0, { message: "At least one field required" });
 
 export async function listApplications(req: Request, res: Response) {
   try {
@@ -31,6 +75,57 @@ export async function getApplicationEvents(req: Request, res: Response) {
     return res.json({ events });
   } catch (error) {
     console.error("Get application events error:", error);
+    return res.status(500).json({ error: String(error) });
+  }
+}
+
+export async function patchApplication(req: Request, res: Response) {
+  try {
+    const userId = req.userId!;
+    const applicationId = req.params.id;
+    if (!applicationId) {
+      return res.status(400).json({ error: "Missing application id" });
+    }
+    const parsed = patchApplicationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+    if (parsed.data.appliedAt && Number.isNaN(Date.parse(parsed.data.appliedAt))) {
+      return res.status(400).json({ error: "Invalid appliedAt" });
+    }
+    const application = await patchApplicationForUser(userId, applicationId, parsed.data);
+    if (!application) {
+      return res.status(404).json({ error: "Application not found" });
+    }
+    return res.json({ application });
+  } catch (error) {
+    console.error("Patch application error:", error);
+    return res.status(500).json({ error: String(error) });
+  }
+}
+
+export async function patchApplicationEvent(req: Request, res: Response) {
+  try {
+    const userId = req.userId!;
+    const applicationId = req.params.id;
+    const eventId = req.params.eventId;
+    if (!applicationId || !eventId) {
+      return res.status(400).json({ error: "Missing application or event id" });
+    }
+    const parsed = patchEventSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+    if (parsed.data.receivedAt && Number.isNaN(Date.parse(parsed.data.receivedAt))) {
+      return res.status(400).json({ error: "Invalid receivedAt" });
+    }
+    const event = await patchApplicationEventForUser(userId, applicationId, eventId, parsed.data);
+    if (!event) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+    return res.json({ event });
+  } catch (error) {
+    console.error("Patch application event error:", error);
     return res.status(500).json({ error: String(error) });
   }
 }
