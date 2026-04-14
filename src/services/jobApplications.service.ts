@@ -290,3 +290,76 @@ export async function patchApplicationEventForUser(
   const events = await getApplicationEventsService(userId, applicationId);
   return events.find((e) => e.id === eventId) ?? null;
 }
+
+/** Delete one timeline event and its scheduled items; refresh application lastEventAt from remaining events. */
+export async function deleteApplicationEventForUser(
+  userId: string,
+  applicationId: string,
+  eventId: string
+): Promise<boolean> {
+  const appId = new mongoose.Types.ObjectId(applicationId);
+  const eid = new mongoose.Types.ObjectId(eventId);
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  const ownsApp = await Application.exists({ _id: appId, userId: userObjId });
+  if (!ownsApp) return false;
+
+  const existing = await Event.findOne({
+    _id: eid,
+    userId: userObjId,
+    applicationId: appId,
+  }).select("_id");
+  if (!existing) return false;
+
+  await ScheduledItem.deleteMany({ userId: userObjId, eventId: eid });
+  await Event.deleteOne({ _id: eid, userId: userObjId, applicationId: appId });
+
+  const latest = await Event.findOne({ userId: userObjId, applicationId: appId })
+    .sort({ receivedAt: -1 })
+    .select("receivedAt")
+    .lean();
+
+  const app = await Application.findOne({ _id: appId, userId: userObjId });
+  if (app) {
+    const nextLast = latest && (latest as { receivedAt?: Date }).receivedAt;
+    app.lastEventAt = nextLast ?? app.appliedAt;
+    await app.save();
+  }
+
+  notifyDashboardUpdate(userId, { internal: true });
+  return true;
+}
+
+/**
+ * Permanently remove an archived application and all events + scheduled items tied to it.
+ * Only applications with archived === true can be deleted (safety).
+ */
+export async function deleteArchivedApplicationForUser(
+  userId: string,
+  applicationId: string
+): Promise<boolean> {
+  const appId = new mongoose.Types.ObjectId(applicationId);
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  const ownsArchived = await Application.exists({
+    _id: appId,
+    userId: userObjId,
+    archived: true,
+  });
+  if (!ownsArchived) return false;
+
+  const eventDocs = await Event.find({ userId: userObjId, applicationId: appId })
+    .select("_id")
+    .lean();
+  const eventIds = eventDocs.map((e: { _id: unknown }) => e._id as mongoose.Types.ObjectId);
+
+  await ScheduledItem.deleteMany({
+    userId: userObjId,
+    $or: [{ applicationId: appId }, { eventId: { $in: eventIds } }],
+  });
+  await Event.deleteMany({ userId: userObjId, applicationId: appId });
+  await Application.deleteOne({ _id: appId, userId: userObjId });
+
+  notifyDashboardUpdate(userId, { internal: true });
+  return true;
+}

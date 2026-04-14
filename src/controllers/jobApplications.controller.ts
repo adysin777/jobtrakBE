@@ -5,6 +5,8 @@ import {
   getApplicationEventsService,
   patchApplicationForUser,
   patchApplicationEventForUser,
+  deleteApplicationEventForUser,
+  deleteArchivedApplicationForUser,
   type ListStatusFilter,
   type ListTimeRange,
 } from "../services/jobApplications.service";
@@ -101,6 +103,43 @@ export async function patchApplication(req: Request, res: Response) {
     return res.json({ application });
   } catch (error) {
     console.error("Patch application error:", error);
+    return res.status(500).json({ error: String(error) });
+  }
+}
+
+export async function deleteApplicationEvent(req: Request, res: Response) {
+  try {
+    const userId = req.userId!;
+    const applicationId = req.params.id;
+    const eventId = req.params.eventId;
+    if (!applicationId || !eventId) {
+      return res.status(400).json({ error: "Missing application or event id" });
+    }
+    const deleted = await deleteApplicationEventForUser(userId, applicationId, eventId);
+    if (!deleted) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+    return res.status(204).send();
+  } catch (error) {
+    console.error("Delete application event error:", error);
+    return res.status(500).json({ error: String(error) });
+  }
+}
+
+export async function deleteApplication(req: Request, res: Response) {
+  try {
+    const userId = req.userId!;
+    const applicationId = req.params.id;
+    if (!applicationId) {
+      return res.status(400).json({ error: "Missing application id" });
+    }
+    const deleted = await deleteArchivedApplicationForUser(userId, applicationId);
+    if (!deleted) {
+      return res.status(404).json({ error: "Archived application not found" });
+    }
+    return res.status(204).send();
+  } catch (error) {
+    console.error("Delete application error:", error);
     return res.status(500).json({ error: String(error) });
   }
 }
