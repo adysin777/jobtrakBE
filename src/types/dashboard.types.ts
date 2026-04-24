@@ -17,6 +17,7 @@ export interface DashboardResponse {
         applicationId?: string;
         company?: string;
         role?: string;
+        links: { label: string; url: string }[];
     }>;
     graph: Array<{
         date: string;

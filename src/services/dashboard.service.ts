@@ -44,6 +44,23 @@ function scheduledItemMatchExcludingArchived(
   };
 }
 
+function mapScheduledItemToDashboardRow(x: any): DashboardResponse["upcoming"][number] {
+    return {
+        id: String(x._id),
+        type: x.type,
+        title: x.title,
+        startAt: toISO(new Date(x.startAt)),
+        endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
+        duration: x.duration,
+        applicationId: x.applicationId ? String(x.applicationId) : undefined,
+        company: x.companyName ?? undefined,
+        role: x.roleTitle ?? undefined,
+        links: Array.isArray(x.links)
+            ? (x.links as { label: string; url: string }[]).map((l) => ({ label: l.label, url: l.url }))
+            : [],
+    };
+}
+
 function getStatusCount(counts: unknown, status: ApplicationStatus): number {
     if (!counts) return 0;
 
@@ -168,17 +185,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         oas
     };
 
-    const upcoming: DashboardResponse["upcoming"] = (upcomingItems ?? []).map((x: any) => ({
-        id: String(x._id),
-        type: x.type,
-        title: x.title,
-        startAt: toISO(new Date(x.startAt)),
-        endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
-        duration: x.duration,
-        applicationId: x.applicationId ? String(x.applicationId) : undefined,
-        company: x.companyName ?? undefined,
-        role: x.roleTitle ?? undefined,
-    }));
+    const upcoming: DashboardResponse["upcoming"] = (upcomingItems ?? []).map(mapScheduledItemToDashboardRow);
 
     const graph: DashboardResponse["graph"] = (dailyStats ?? []).map((d: any) => {
         const dayStr = typeof d.day === "string" ? d.day : ymd(d.day);
@@ -199,17 +206,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
 
     const today: DashboardResponse["today"] = {
         date: ymd(now),
-        items: (todayItems ?? []).map((x: any) => ({
-            id: String(x._id),
-            type: x.type,
-            title: x.title,
-            startAt: toISO(new Date(x.startAt)),
-            endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
-            duration: x.duration,
-            applicationId: x.applicationId ? String(x.applicationId) : undefined,
-            company: x.companyName ?? undefined,
-            role: x.roleTitle ?? undefined,
-        })),
+        items: (todayItems ?? []).map(mapScheduledItemToDashboardRow),
     };
 
     return { counts, upcoming, graph, calendarMonth, today, connectedInboxCount };
@@ -240,17 +237,7 @@ export async function getTimelineForDate(
         .lean();
     return {
         date: dateStr,
-        items: (items as any[]).map((x) => ({
-            id: String(x._id),
-            type: x.type,
-            title: x.title,
-            startAt: toISO(new Date(x.startAt)),
-            endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
-            duration: x.duration,
-            applicationId: x.applicationId ? String(x.applicationId) : undefined,
-            company: x.companyName ?? undefined,
-            role: x.roleTitle ?? undefined,
-        })),
+        items: (items as any[]).map(mapScheduledItemToDashboardRow),
     };
 }
 
