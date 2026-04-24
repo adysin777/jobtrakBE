@@ -94,11 +94,17 @@ const ingestEventJsonSchema = {
           },
           links: {
             type: "array",
+            description:
+              "Meeting/OA URLs only if they appear verbatim in the email (http/https). Omit the entire links array if none—never placeholders like [link] or invented URLs.",
             items: {
               type: "object",
               properties: {
                 label: { type: "string" },
-                url: { type: "string" },
+                url: {
+                  type: "string",
+                  description:
+                    "Full http(s) URL copied exactly from the email. Do not output placeholder text; omit this link object if no real URL exists in the body.",
+                },
               },
               required: ["label", "url"],
               additionalProperties: false,
@@ -181,6 +187,11 @@ IMPORTANT: If the email mentions scheduling an interview, it IS job-related. Ext
 - Scheduled items: Extract interviews/OAs with dates/times. If the email gives multiple distinct times (including two sessions on the same day), output multiple scheduledItems—one per time. Do not collapse two times into one item.
 - AI summary: Brief summary of the email content
 
+LINKS (scheduledItems.links):
+- Only include a link when a real URL appears in the email body (or headers quoted in the body), e.g. https://meet.google.com/...
+- Copy the URL exactly. Never invent, guess, or paraphrase URLs.
+- Never use placeholders (e.g. "[Link to the meeting]", "see calendar", "TBD") as url—omit the links array entirely, or omit individual link objects, if no URL is present. Calendar invites often say "link in invite" without the URL in text: in that case leave links out.
+
 DATE PARSING RULES:
 - The email was received at: ${receivedAtReadable} (${receivedAtISO})
 - Use this as your reference point for relative dates
@@ -200,7 +211,9 @@ ${email.body}
 
 Extract job application information from this email. If it's not job-related, set isJobRelated to false.
 
-If multiple interview/OA times appear, scheduledItems must have one entry per distinct start time.`;
+If multiple interview/OA times appear, scheduledItems must have one entry per distinct start time.
+
+Do not add scheduledItems.links unless the email contains an actual http(s) URL for that item; never use fake or placeholder URLs.`;
 
   try {
     const completion = await openai.chat.completions.create({
@@ -275,6 +288,16 @@ If multiple interview/OA times appear, scheduledItems must have one entry per di
       return dateStr;
     };
 
+    const isValidHttpUrl = (value: unknown): boolean => {
+      if (typeof value !== "string") return false;
+      try {
+        const u = new URL(value.trim());
+        return u.protocol === "http:" || u.protocol === "https:";
+      } catch {
+        return false;
+      }
+    };
+
     // Build EventPayload (userId set by caller). Derive status from eventType so OA/INTERVIEW/OFFER/REJECTION advance the application.
     const eventType = parsed.eventType ?? statusToEventType(parsed.status);
     const status = eventTypeToStatus(eventType, parsed.status as EventPayload["status"]);
@@ -294,6 +317,15 @@ If multiple interview/OA times appear, scheduledItems must have one entry per di
       scheduledItems: parsed.scheduledItems?.map((item: any) => {
         const normalizedStart = normalizeDateTime(item.startAt)!;
         const normalizedEnd = item.endAt ? normalizeDateTime(item.endAt) : undefined;
+        const links = Array.isArray(item.links)
+          ? item.links.filter(
+              (l: any) =>
+                l &&
+                typeof l.label === "string" &&
+                typeof l.url === "string" &&
+                isValidHttpUrl(l.url)
+            )
+          : undefined;
         return {
           type: item.type,
           title: item.title,
@@ -301,7 +333,7 @@ If multiple interview/OA times appear, scheduledItems must have one entry per di
           endAt: normalizedEnd ? validateDate(normalizedEnd, "endAt") : undefined,
           duration: item.duration,
           companyName: item.companyName,
-          links: item.links,
+          links: links?.length ? links : undefined,
           notes: item.notes,
         };
       }),

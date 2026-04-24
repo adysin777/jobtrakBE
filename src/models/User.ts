@@ -1,5 +1,19 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
+export interface IGoogleCalendarConnection {
+    _id: mongoose.Types.ObjectId;
+    provider: "google";
+    email: string;
+    status: "connected" | "error" | "disconnected";
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: Date;
+    selectedCalendarId?: string;
+    selectedCalendarSummary?: string;
+    syncEnabled: boolean;
+    createdAt: Date;
+}
+
 export interface IUser extends Document {
     primaryEmail: string;
     name: string;
@@ -24,6 +38,7 @@ export interface IUser extends Document {
         watchExpiration?: Date;
         createdAt: Date;
     }[];
+    connectedCalendars: IGoogleCalendarConnection[];
 
     createdAt: Date;
     updatedAt: Date;
@@ -79,6 +94,57 @@ const connectedInboxSchema = new Schema(
     { _id: false }
 );
 
+const connectedCalendarSchema = new Schema(
+    {
+        provider: {
+            type: String,
+            enum: ["google"],
+            required: true,
+            default: "google",
+        },
+        email: {
+            type: String,
+            required: true,
+            lowercase: true,
+            trim: true,
+        },
+        status: {
+            type: String,
+            enum: ["connected", "error", "disconnected"],
+            default: "connected",
+        },
+        accessToken: {
+            type: String,
+            required: true,
+        },
+        refreshToken: {
+            type: String,
+            required: true,
+        },
+        expiresAt: {
+            type: Date,
+            required: true,
+        },
+        selectedCalendarId: {
+            type: String,
+            trim: true,
+        },
+        selectedCalendarSummary: {
+            type: String,
+            trim: true,
+        },
+        syncEnabled: {
+            type: Boolean,
+            default: true,
+        },
+        createdAt: {
+            type: Date,
+            default: Date.now,
+        },
+    },
+    { _id: true }
+);
+
 const userSchema = new Schema<IUser>(
     {
         primaryEmail: {
@@ -110,6 +176,10 @@ const userSchema = new Schema<IUser>(
             type: [connectedInboxSchema],
             default: [],
         },
+        connectedCalendars: {
+            type: [connectedCalendarSchema],
+            default: [],
+        },
     },
     {
         timestamps: true,
@@ -118,5 +188,6 @@ const userSchema = new Schema<IUser>(
 
 // Fast lookup: "which user has this inbox email?" (webhook, workers)
 userSchema.index({ "connectedInboxes.email": 1, "connectedInboxes.provider": 1 });
+userSchema.index({ "connectedCalendars.email": 1, "connectedCalendars.provider": 1 });
 
 export const User = mongoose.model<IUser>("User", userSchema);

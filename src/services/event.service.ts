@@ -8,6 +8,7 @@ import { UserDailyStats } from "../models/UserDailyStats";
 import type { ApplicationStatus } from "../models/Application";
 import { getMaxTrackedApplications } from "../config/planConfig";
 import { syncUserPlanFromStripe, expireUserPlanIfNeeded } from "../services/billing.service";
+import { enqueueScheduledItemUpsert } from "./googleCalendar.service";
 import mongoose from "mongoose";
 
 /**
@@ -252,6 +253,9 @@ async function attachScheduledItemsToApplication(event: any, applicationId: mong
             { eventId: event._id },
             { $set: { applicationId } }
         );
+        for (const item of pendingItems) {
+            enqueueScheduledItemUpsert(event.userId.toString(), item._id.toString());
+        }
         return;
     }
 
@@ -274,6 +278,7 @@ async function attachScheduledItemsToApplication(event: any, applicationId: mong
                 { _id: pendingItem._id },
                 { $set: { applicationId } }
             );
+            enqueueScheduledItemUpsert(event.userId.toString(), pendingItem._id.toString());
             continue;
         }
 
@@ -300,6 +305,7 @@ async function attachScheduledItemsToApplication(event: any, applicationId: mong
                 },
             }
         );
+        enqueueScheduledItemUpsert(event.userId.toString(), targetItem._id.toString());
 
         await ScheduledItem.deleteOne({ _id: pendingItem._id });
     }
@@ -308,7 +314,7 @@ async function attachScheduledItemsToApplication(event: any, applicationId: mong
 /**
  * Create Event + ScheduledItems from extracted payload. Event has assignmentStatus unprocessed; ScheduledItems have eventId set, applicationId null.
  */
-export async function createEventFromPayload(payload: EventPayload): Promise<{ event: mongoose.Document; userId: mongoose.Types.ObjectId }> {
+export async function createEventFromPayload(payload: EventPayload): Promise<{ event: any; userId: mongoose.Types.ObjectId }> {
     const data = EventPayloadSchema.parse(payload);
     if (data.scheduledItems && data.scheduledItems.length > 1) {
         ensureDistinctScheduledItemStartTimes(data.scheduledItems);
@@ -461,6 +467,10 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
         // If the Event was assigned earlier but ScheduledItems were created later (e.g. ingest retries),
         // backfill ScheduledItem.applicationId so calendar/reminders become visible.
         if (event.applicationId) {
+            const pending = await ScheduledItem.find({
+                eventId,
+                $or: [{ applicationId: null }, { applicationId: { $exists: false } }],
+            }).select("_id");
             await ScheduledItem.updateMany(
                 {
                     eventId,
@@ -468,6 +478,9 @@ export async function assignEventToApplication(eventId: mongoose.Types.ObjectId)
                 },
                 { $set: { applicationId: event.applicationId } }
             );
+            for (const item of pending) {
+                enqueueScheduledItemUpsert(event.userId.toString(), item._id.toString());
+            }
         }
         return;
     }

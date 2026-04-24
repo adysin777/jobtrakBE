@@ -3,9 +3,26 @@ import { Event, type EventStatus, type EventType } from "../models/Event";
 import { ScheduledItem } from "../models/ScheduledItem";
 import mongoose, { type QueryFilter } from "mongoose";
 import { notifyDashboardUpdate } from "./sse.service";
+import {
+  enqueueScheduledItemDelete,
+  type ScheduledItemDeleteSnapshot,
+} from "./googleCalendar.service";
 
 function simpleNorm(str: string): string {
   return str.toLocaleLowerCase().trim();
+}
+
+function scheduledItemDeleteSnapshot(doc: any): ScheduledItemDeleteSnapshot {
+  const sync = doc?.googleSync;
+  const googleSync = sync
+    ? sync instanceof Map
+      ? Object.fromEntries(sync.entries())
+      : sync
+    : undefined;
+  return {
+    scheduledItemId: doc._id.toString(),
+    googleSync,
+  };
 }
 
 function getStatusRank(status: ApplicationStatus): number {
@@ -311,8 +328,15 @@ export async function deleteApplicationEventForUser(
   }).select("_id");
   if (!existing) return false;
 
+  const scheduledItems = await ScheduledItem.find({
+    userId: userObjId,
+    eventId: eid,
+  }).select("_id googleSync");
   await ScheduledItem.deleteMany({ userId: userObjId, eventId: eid });
   await Event.deleteOne({ _id: eid, userId: userObjId, applicationId: appId });
+  for (const item of scheduledItems) {
+    enqueueScheduledItemDelete(userId, scheduledItemDeleteSnapshot(item));
+  }
 
   const latest = await Event.findOne({ userId: userObjId, applicationId: appId })
     .sort({ receivedAt: -1 })
@@ -352,6 +376,10 @@ export async function deleteArchivedApplicationForUser(
     .select("_id")
     .lean();
   const eventIds = eventDocs.map((e: { _id: unknown }) => e._id as mongoose.Types.ObjectId);
+  const scheduledItems = await ScheduledItem.find({
+    userId: userObjId,
+    $or: [{ applicationId: appId }, { eventId: { $in: eventIds } }],
+  }).select("_id googleSync");
 
   await ScheduledItem.deleteMany({
     userId: userObjId,
@@ -359,6 +387,9 @@ export async function deleteArchivedApplicationForUser(
   });
   await Event.deleteMany({ userId: userObjId, applicationId: appId });
   await Application.deleteOne({ _id: appId, userId: userObjId });
+  for (const item of scheduledItems) {
+    enqueueScheduledItemDelete(userId, scheduledItemDeleteSnapshot(item));
+  }
 
   notifyDashboardUpdate(userId, { internal: true });
   return true;

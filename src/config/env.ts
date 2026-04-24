@@ -10,6 +10,14 @@ requiredEnvVars.forEach((varName) => {
     }
 });
 
+function parseCommaList(value: string | undefined): string[] {
+    if (!value || !value.trim()) return [];
+    return value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+}
+
 export const config = {
     mongodbUri: process.env.MONGODB_URI!,
     port: parseInt(process.env.PORT!, 10),
@@ -18,4 +26,6 @@ export const config = {
     backendUrl: process.env.BACKEND_URL || `http://localhost:${parseInt(process.env.PORT!, 10)}`,
     gmailPubSubTopic: process.env.GMAIL_PUBSUB_TOPIC || "",
     publicUrl: process.env.PUBLIC_URL || "",
+    /** Extra browser origins allowed by CORS (e.g. ngrok preview URLs). Comma-separated in CORS_ALLOWED_ORIGINS. */
+    corsAllowedOrigins: parseCommaList(process.env.CORS_ALLOWED_ORIGINS),
 };

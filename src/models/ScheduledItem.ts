@@ -9,6 +9,12 @@ export interface IScheduledItemLink {
     url: string;
 }
 
+export interface IGoogleScheduledItemSyncState {
+    eventId: string;
+    etag?: string;
+    updatedAt?: Date;
+}
+
 export interface IScheduledItem extends Document {
     userId: Types.ObjectId;
     /** Set when event is assigned to an application; null until then for auto-created items */
@@ -38,6 +44,7 @@ export interface IScheduledItem extends Document {
         messageId?: string;
         threadId: string;
     };
+    googleSync?: Map<string, IGoogleScheduledItemSyncState>;
 
     createdAt: Date;
     updatedAt: Date;
@@ -57,6 +64,15 @@ const sourceMetaSchema = new Schema(
         inboxEmail: { type: String, lowercase: true, trim: true },
         messageId: { type: String, trim: true },
         threadId: { type: String, trim: true },
+    },
+    { _id: false }
+);
+
+const googleSyncStateSchema = new Schema<IGoogleScheduledItemSyncState>(
+    {
+        eventId: { type: String, required: true, trim: true },
+        etag: { type: String, trim: true },
+        updatedAt: { type: Date, default: Date.now },
     },
     { _id: false }
 );
@@ -109,6 +125,10 @@ const scheduledItemSchema = new Schema<IScheduledItem>(
         },
 
         sourceMeta: { type: sourceMetaSchema },
+        googleSync: {
+            type: Map,
+            of: googleSyncStateSchema,
+        },
     },
     { timestamps: true }
 );
