@@ -102,13 +102,33 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         archivedIds
     );
 
-    const [statsDoc, upcomingItems, todayItems, dailyStats, userDoc, totalApps] = await Promise.all([
+    const upcomingOaMatch = { ...upcomingMatch, type: "OA" as const };
+    const upcomingInterviewMatch = { ...upcomingMatch, type: "INTERVIEW" as const };
+
+    const [
+        statsDoc,
+        upcomingItems,
+        todayItems,
+        dailyStats,
+        userDoc,
+        totalApps,
+        activeApps,
+        upcomingOaScheduledCount,
+        upcomingInterviewScheduledCount,
+    ] = await Promise.all([
         UserDashboardStats.findOne({ userId }).lean(),
         ScheduledItem.find(upcomingMatch).sort({ startAt: 1 }).limit(10).lean(),
-        ScheduledItem.find(todayMatch).sort({ startAt: 1}).lean(),
+        ScheduledItem.find(todayMatch).sort({ startAt: 1 }).lean(),
         UserDailyStats.find({ userId }).sort({ day: 1 }).limit(450).lean(),
         User.findById(userId).select("connectedInboxes").lean(),
         Application.countDocuments({ userId: userIdObj, archived: { $ne: true } }),
+        Application.countDocuments({
+            userId: userIdObj,
+            archived: { $ne: true },
+            status: { $nin: ["OFFER", "REJECTED"] },
+        }),
+        ScheduledItem.countDocuments(upcomingOaMatch),
+        ScheduledItem.countDocuments(upcomingInterviewMatch),
     ])
 
     console.log(upcomingItems);
@@ -165,16 +185,16 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         { $sort: { date: 1 } },
       ]);
 
-    const applied = getStatusCount(statsDoc?.countsByStatus, "APPLIED");
-    const oas = getStatusCount(statsDoc?.countsByStatus, "OA");
-    const interviews = getStatusCount(statsDoc?.countsByStatus, "INTERVIEW");
+    /** Upcoming scheduled slots (same filter as dashboard `upcoming` list), not application-stage totals. */
+    const oas = upcomingOaScheduledCount;
+    const interviews = upcomingInterviewScheduledCount;
     const offers = getStatusCount(statsDoc?.countsByStatus, "OFFER");
     const rejected = getStatusCount(statsDoc?.countsByStatus, "REJECTED");
 
-    // Stable distinct-application total.
+    // All non-archived applications (includes offer/rejected).
     const total = totalApps;
-
-    const active = statsDoc?.activeCount ?? 0;
+    /** In pipeline: not archived and not terminal offer/rejection. */
+    const active = activeApps;
 
     const counts = {
         total,
@@ -182,7 +202,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         offers,
         rejected,
         interviews,
-        oas
+        oas,
     };
 
     const upcoming: DashboardResponse["upcoming"] = (upcomingItems ?? []).map(mapScheduledItemToDashboardRow);
