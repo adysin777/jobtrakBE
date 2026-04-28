@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { config } from "../config/env";
-import { EventPayloadSchema, type EventPayload, type EventType } from "../types/event.types";
+import { EventPayloadSchema, type EventPayload, type EventScheduledItem, type EventType } from "../types/event.types";
 import type { LlmRoutingCandidate, LlmRoutingContextBundle } from "../types/llmIngestContext.types";
 
 export interface AgentEmailData {
@@ -10,7 +10,7 @@ export interface AgentEmailData {
   userEmail: string;
   userId?: string;
   provider: "gmail" | "outlook";
-  inboxEmail: string;
+  inboxEmail?: string;
   messageId: string;
   threadId?: string;
   receivedAt: string;
@@ -47,13 +47,13 @@ const EVENT_TYPE_ENUM = [
 
 const STATUS_ENUM = ["APPLIED", "OA", "INTERVIEW", "OFFER", "REJECTED"] as const;
 
-/** One calendar slot (OA or interview) — nested under step-2 root. */
+/** One scheduled/actionable item — nested under step-2 root. */
 const EXTRACT_SCHEDULED_ITEM_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  description: "One OA or interview block with its own startAt.",
+  description: "One OA, interview, deadline, or other action block with its own startAt.",
   properties: {
-    type: { type: "string", enum: ["OA", "INTERVIEW"] },
+    type: { type: "string", enum: ["OA", "INTERVIEW", "DEADLINE", "OTHER"] },
     title: {
       type: "string",
       description: 'e.g. "Team interview — session 1", "Coding round 2"',
@@ -99,7 +99,7 @@ const EXTRACT_EVENT_BLOB_SCHEMA = {
 
 /**
  * Step 2 structured output: count slots first (calendarSlotCount), then fill scheduledItems to match.
- * scheduledItems null = no concrete OA/interview times (updates, doc requests, etc.).
+ * scheduledItems null = no concrete scheduled/actionable items.
  */
 const EXTRACT_SCHEMA = {
   type: "object",
@@ -110,7 +110,7 @@ const EXTRACT_SCHEMA = {
       type: "integer",
       minimum: 0,
       description:
-        "Number of distinct OA/interview calendar start times in this email. MUST equal scheduledItems.length when scheduledItems is an array; MUST be 0 when scheduledItems is null.",
+        "Number of distinct scheduled/actionable start times in this email. MUST equal scheduledItems.length when scheduledItems is an array; MUST be 0 when scheduledItems is null.",
     },
     event: {
       anyOf: [
@@ -123,12 +123,12 @@ const EXTRACT_SCHEMA = {
         {
           type: "array",
           description:
-            "Exactly calendarSlotCount items. One object per distinct start time; never merge multiple times into one.",
+            "Exactly calendarSlotCount items. One object per distinct start time/action; never merge multiple times or actions into one.",
           items: EXTRACT_SCHEDULED_ITEM_SCHEMA,
         },
         {
           type: "null",
-          description: "No calendar slots (UPDATE, ACTION_REQUIRED without times, pure acknowledgement, etc.).",
+          description: "No scheduled/actionable items (pure acknowledgement, update without a date/time, etc.).",
         },
       ],
     },
@@ -229,6 +229,22 @@ function eventTypeToStatus(eventType: string, fallback: EventPayload["status"]):
   return (m[eventType] ?? fallback) as EventPayload["status"];
 }
 
+type ScheduledItemPayloadType = EventScheduledItem["type"];
+
+function normalizeScheduledItemType(rawType: unknown, eventType: EventType, item: any): ScheduledItemPayloadType {
+  const normalized = typeof rawType === "string" ? rawType.toUpperCase() : "";
+  if (normalized === "OA" || normalized === "INTERVIEW" || normalized === "DEADLINE" || normalized === "OTHER") {
+    return normalized;
+  }
+
+  const text = `${item?.title ?? ""} ${item?.notes ?? ""}`.toLowerCase();
+  const looksDueBy = /\b(by|due|deadline|before|within|submit|upload|complete|sign)\b/.test(text);
+  if (normalized === "ACTION_REQUIRED" && looksDueBy) return "DEADLINE";
+  if (normalized === "OTHER_UPDATE" || normalized === "UPDATE" || normalized === "ACTION_REQUIRED") return "OTHER";
+  if (eventType === "ACTION_REQUIRED" && looksDueBy) return "DEADLINE";
+  return "OTHER";
+}
+
 function scheduledItemsLength(raw: AgentExtractStructured["scheduledItems"]): number {
   return raw == null ? 0 : raw.length;
 }
@@ -324,11 +340,13 @@ Workflow (follow this order):
 1) Decide isJobRelated.
 2) If not job-related: set event=null, scheduledItems=null, calendarSlotCount=0 and stop.
 3) If job-related: fill event (one object) with companyName, roleTitle, eventType, status, aiSummary.
-4) Count distinct OA/interview calendar START times mentioned in this email only. Set calendarSlotCount to that integer.
+4) Count distinct scheduled/actionable START times mentioned in this email only. Set calendarSlotCount to that integer.
 5) Build scheduledItems: an array with EXACTLY calendarSlotCount objects (one per distinct startAt). If there are zero concrete times, set scheduledItems=null and calendarSlotCount=0.
 6) calendarSlotCount MUST always equal (scheduledItems === null ? 0 : scheduledItems.length).
 
 Rules for event.eventType: use enums precisely. RESCHEDULE when changing an existing OA/INTERVIEW time using context. CANCELLATION/STAGE_ROLLBACK only when explicitly rescinding or moving backward. ACTION_REQUIRED for docs/availability without firm times. UPDATE/OTHER_UPDATE for lightweight confirmations.
+
+Rules for scheduledItems[].type: OA for online assessments; INTERVIEW for recruiting interviews; DEADLINE for due-by tasks such as uploading documents, signing forms, completing onboarding/background checks by a stated cutoff; OTHER for fixed non-stage meetings or open-ended actions with no explicit due date (e.g. "confirm your interview time", RSVP, reply with availability). If a confirmation action has a cutoff ("confirm by EOD Friday"), use DEADLINE. If it has no cutoff, use OTHER with the email received time as startAt unless the email gives a better action time, and let the user mark it complete.
 
 When application context is provided, align companyName and roleTitle with that candidate unless the email names a different role.
 
@@ -408,7 +426,7 @@ Step 2 output: set calendarSlotCount first, then fill scheduledItems with that m
           const normalizedStart = normalizeDateTime(item.startAt)!;
           const normalizedEnd = item.endAt ? normalizeDateTime(item.endAt) : undefined;
           return {
-            type: item.type as "OA" | "INTERVIEW",
+            type: normalizeScheduledItemType(item.type, eventType, item),
             title: item.title,
             startAt: validateDate(normalizedStart, email.receivedAt, "startAt"),
             endAt: normalizedEnd ? validateDate(normalizedEnd, email.receivedAt, "endAt") : undefined,
@@ -424,7 +442,7 @@ Step 2 output: set calendarSlotCount first, then fill scheduledItems with that m
     ...(selected ? { suggestedApplicationId: selected.applicationId } : {}),
     userEmail: email.userEmail,
     provider: email.provider,
-    inboxEmail: email.inboxEmail,
+    inboxEmail: email.inboxEmail ?? email.userEmail,
     messageId: email.messageId,
     threadId: email.threadId,
     receivedAt: email.receivedAt,

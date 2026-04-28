@@ -1,12 +1,9 @@
 import mongoose from "mongoose";
 import type { DashboardResponse } from "../types/dashboard.types";
 import { User } from "../models/User";
-import { UserDashboardStats } from "../models/UserDashboardStats";
 import { Application } from "../models/Application";
 import { ScheduledItem } from "../models/ScheduledItem"
 import { UserDailyStats } from "../models/UserDailyStats";
-
-import type { ApplicationStatus } from "../models/UserDashboardStats";
 
 function toISO(d: Date) {
     if (!d || isNaN(d.getTime())) {
@@ -37,28 +34,21 @@ function scheduledItemMatchExcludingArchived(
   base: Record<string, unknown>,
   archivedIds: mongoose.Types.ObjectId[]
 ): Record<string, unknown> {
-  if (archivedIds.length === 0) return base;
-  return {
+  const activeBase = {
     ...base,
-    $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }],
+    $and: [
+      ...(((base as any).$and as unknown[] | undefined) ?? []),
+      { $or: [{ completedAt: null }, { completedAt: { $exists: false } }] },
+    ],
   };
-}
-
-function getStatusCount(counts: unknown, status: ApplicationStatus): number {
-    if (!counts) return 0;
-
-    // If map
-    if (counts instanceof Map) {
-        return Number(counts.get(status) ?? 0);
-    }
-
-    // If plain object
-    if (typeof counts === "object") {
-        const v = (counts as any)[status];
-        return Number(v ?? 0);
-    }
-
-    return 0;
+  if (archivedIds.length === 0) return activeBase;
+  return {
+    ...activeBase,
+    $and: [
+      ...(((activeBase as any).$and as unknown[] | undefined) ?? []),
+      { $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }] },
+    ],
+  };
 }
 
 export async function buildDashboard(userId: string): Promise<DashboardResponse> {
@@ -77,7 +67,13 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const archivedIds = await archivedApplicationIds(userIdObj);
 
     const upcomingMatch = scheduledItemMatchExcludingArchived(
-        { userId: userIdObj, startAt: { $gte: now } },
+        {
+            userId: userIdObj,
+            $or: [
+                { startAt: { $gte: now } },
+                { type: { $in: ["OA", "DEADLINE", "OTHER"] } },
+            ],
+        },
         archivedIds
     );
     const todayMatch = scheduledItemMatchExcludingArchived(
@@ -85,13 +81,15 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         archivedIds
     );
 
-    const [statsDoc, upcomingItems, todayItems, dailyStats, userDoc, totalApps] = await Promise.all([
-        UserDashboardStats.findOne({ userId }).lean(),
+    const [upcomingItems, todayItems, dailyStats, userDoc, statusCounts] = await Promise.all([
         ScheduledItem.find(upcomingMatch).sort({ startAt: 1 }).limit(10).lean(),
         ScheduledItem.find(todayMatch).sort({ startAt: 1}).lean(),
         UserDailyStats.find({ userId }).sort({ day: 1 }).limit(450).lean(),
         User.findById(userId).select("connectedInboxes").lean(),
-        Application.countDocuments({ userId: userIdObj, archived: { $ne: true } }),
+        Application.aggregate([
+            { $match: { userId: userIdObj, archived: { $ne: true } } },
+            { $group: { _id: "$status", count: { $sum: 1 } } },
+        ]),
     ])
 
     console.log(upcomingItems);
@@ -101,9 +99,10 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const calendarMatch: Record<string, unknown> = {
         userId: userIdObj,
         startAt: { $gte: monthStart, $lt: monthEnd },
+        $and: [{ $or: [{ completedAt: null }, { completedAt: { $exists: false } }] }],
     };
     if (archivedIds.length > 0) {
-        (calendarMatch as any).$or = [{ applicationId: null }, { applicationId: { $nin: archivedIds } }];
+        (calendarMatch as any).$and.push({ $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }] });
     }
 
     const calendarDays = await ScheduledItem.aggregate([
@@ -148,16 +147,19 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         { $sort: { date: 1 } },
       ]);
 
-    const applied = getStatusCount(statsDoc?.countsByStatus, "APPLIED");
-    const oas = getStatusCount(statsDoc?.countsByStatus, "OA");
-    const interviews = getStatusCount(statsDoc?.countsByStatus, "INTERVIEW");
-    const offers = getStatusCount(statsDoc?.countsByStatus, "OFFER");
-    const rejected = getStatusCount(statsDoc?.countsByStatus, "REJECTED");
+    const countByStatus = new Map<string, number>(
+        (statusCounts as Array<{ _id: string; count: number }>).map((row) => [row._id, row.count])
+    );
+    const applied = countByStatus.get("APPLIED") ?? 0;
+    const oas = countByStatus.get("OA") ?? 0;
+    const interviews = countByStatus.get("INTERVIEW") ?? 0;
+    const offers = countByStatus.get("OFFER") ?? 0;
+    const rejected = countByStatus.get("REJECTED") ?? 0;
 
     // Stable distinct-application total.
-    const total = totalApps;
+    const total = applied + oas + interviews + offers + rejected;
 
-    const active = statsDoc?.activeCount ?? 0;
+    const active = applied + oas + interviews;
 
     const counts = {
         total,

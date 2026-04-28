@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const ScheduledItemSchema = z.object({
-    type: z.enum(["OA", "INTERVIEW"]),
+    type: z.enum(["OA", "INTERVIEW", "DEADLINE", "OTHER"]),
     title: z.string(),
     startAt: z.string().datetime(),
     endAt: z.string().datetime().optional(),

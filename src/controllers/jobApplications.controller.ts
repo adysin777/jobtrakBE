@@ -5,6 +5,7 @@ import {
   getApplicationEventsService,
   patchApplicationForUser,
   patchApplicationEventForUser,
+  patchScheduledItemCompletionForUser,
   deleteApplicationEventForUser,
   deleteArchivedApplicationForUser,
   type ListStatusFilter,
@@ -47,6 +48,12 @@ const patchEventSchema = z
   })
   .strict()
   .refine((o) => Object.keys(o).length > 0, { message: "At least one field required" });
+
+const patchScheduledItemSchema = z
+  .object({
+    completed: z.boolean(),
+  })
+  .strict();
 
 export async function listApplications(req: Request, res: Response) {
   try {
@@ -166,6 +173,34 @@ export async function patchApplicationEvent(req: Request, res: Response) {
     return res.json({ event });
   } catch (error) {
     console.error("Patch application event error:", error);
+    return res.status(500).json({ error: String(error) });
+  }
+}
+
+export async function patchScheduledItem(req: Request, res: Response) {
+  try {
+    const userId = req.userId!;
+    const applicationId = req.params.id;
+    const scheduledItemId = req.params.scheduledItemId;
+    if (!applicationId || !scheduledItemId) {
+      return res.status(400).json({ error: "Missing application or scheduled item id" });
+    }
+    const parsed = patchScheduledItemSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+    const scheduledItem = await patchScheduledItemCompletionForUser(
+      userId,
+      applicationId,
+      scheduledItemId,
+      parsed.data.completed
+    );
+    if (!scheduledItem) {
+      return res.status(404).json({ error: "Scheduled item not found" });
+    }
+    return res.json({ scheduledItem });
+  } catch (error) {
+    console.error("Patch scheduled item error:", error);
     return res.status(500).json({ error: String(error) });
   }
 }
