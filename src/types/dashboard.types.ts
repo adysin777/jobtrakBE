@@ -13,6 +13,7 @@ export interface DashboardResponse {
         title: string;
         startAt: string;
         endAt?: string;
+        completedAt?: string;
         duration?: number;
         applicationId?: string;
         company?: string;

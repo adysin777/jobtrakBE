@@ -5,6 +5,7 @@ import {
   getApplicationEvents,
   patchApplication,
   patchApplicationEvent,
+  patchScheduledItemCompletion,
   deleteApplicationEvent,
   deleteApplication,
 } from "../controllers/jobApplications.controller";
@@ -14,6 +15,7 @@ router.get("/", requireUser, listApplications);
 router.delete("/:id/events/:eventId", requireUser, deleteApplicationEvent);
 router.delete("/:id", requireUser, deleteApplication);
 router.patch("/:id/events/:eventId", requireUser, patchApplicationEvent);
+router.patch("/:id/scheduled-items/:scheduledItemId", requireUser, patchScheduledItemCompletion);
 router.get("/:id/events", requireUser, getApplicationEvents);
 router.patch("/:id", requireUser, patchApplication);
 export default router;

@@ -51,6 +51,7 @@ function mapScheduledItemToDashboardRow(x: any): DashboardResponse["upcoming"][n
         title: x.title,
         startAt: toISO(new Date(x.startAt)),
         endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
+        completedAt: x.completedAt ? toISO(new Date(x.completedAt)) : undefined,
         duration: x.duration,
         applicationId: x.applicationId ? String(x.applicationId) : undefined,
         company: x.companyName ?? undefined,
@@ -94,7 +95,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const archivedIds = await archivedApplicationIds(userIdObj);
 
     const upcomingMatch = scheduledItemMatchExcludingArchived(
-        { userId: userIdObj, startAt: { $gte: now } },
+        { userId: userIdObj, startAt: { $gte: now }, completedAt: null },
         archivedIds
     );
     const todayMatch = scheduledItemMatchExcludingArchived(
