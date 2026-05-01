@@ -107,7 +107,7 @@ export async function listApplicationsService(
 
 export interface ApplicationEventScheduledItem {
   id: string;
-  type: "OA" | "INTERVIEW";
+  type: "OA" | "INTERVIEW" | "DEADLINE" | "OTHER";
   title: string;
   startAt: string;
   endAt?: string;
@@ -255,6 +255,43 @@ export interface PatchApplicationEventInput {
   status?: EventStatus;
   receivedAt?: string;
   aiSummary?: string | null;
+}
+
+export async function patchScheduledItemCompletionForUser(
+  userId: string,
+  applicationId: string,
+  scheduledItemId: string,
+  completed: boolean
+): Promise<ApplicationEventScheduledItem | null> {
+  const appId = new mongoose.Types.ObjectId(applicationId);
+  const itemId = new mongoose.Types.ObjectId(scheduledItemId);
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  const ownsApp = await Application.exists({ _id: appId, userId: userObjId });
+  if (!ownsApp) return null;
+
+  const item = await ScheduledItem.findOne({
+    _id: itemId,
+    userId: userObjId,
+    applicationId: appId,
+  });
+  if (!item) return null;
+
+  item.completedAt = completed ? new Date() : null;
+  await item.save();
+  notifyDashboardUpdate(userId, { applicationId, internal: true });
+
+  return {
+    id: item._id.toString(),
+    type: item.type,
+    title: item.title,
+    startAt: item.startAt.toISOString(),
+    endAt: item.endAt ? item.endAt.toISOString() : undefined,
+    timezone: item.timezone,
+    completedAt: item.completedAt ? item.completedAt.toISOString() : undefined,
+    notes: item.notes,
+    links: Array.isArray(item.links) ? item.links : [],
+  };
 }
 
 export async function patchApplicationEventForUser(

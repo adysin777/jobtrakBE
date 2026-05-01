@@ -13,12 +13,13 @@ export async function ingestJobEvent(req: Request, res: Response) {
         const { event, userId } = await createEventFromPayload(payload);
         await assignEventToApplication(event._id as any);
         const assignedEvent = await Event.findById(event._id).select({ applicationId: 1 }).lean();
+        const eventDoc = event as any;
         notifyDashboardUpdate(userId.toString(), {
             applicationId: assignedEvent?.applicationId ? String(assignedEvent.applicationId) : undefined,
-            companyName: event.companyName,
-            eventType: event.eventType,
+            companyName: eventDoc.companyName,
+            eventType: eventDoc.eventType,
         });
-        return res.json({ ok: true, eventId: (event as any)._id?.toString() });
+        return res.json({ ok: true, eventId: eventDoc._id?.toString() });
     } catch (error) {
         console.error("Ingest error:", error);
         return res.status(400).json({ error: String(error) });

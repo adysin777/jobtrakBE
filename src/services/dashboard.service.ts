@@ -1,12 +1,10 @@
 import mongoose from "mongoose";
 import type { DashboardResponse } from "../types/dashboard.types";
 import { User } from "../models/User";
-import { UserDashboardStats } from "../models/UserDashboardStats";
 import { Application } from "../models/Application";
 import { ScheduledItem } from "../models/ScheduledItem"
 import { UserDailyStats } from "../models/UserDailyStats";
-
-import type { ApplicationStatus } from "../models/UserDashboardStats";
+import { UserDashboardStats, type ApplicationStatus } from "../models/UserDashboardStats";
 
 function toISO(d: Date) {
     if (!d || isNaN(d.getTime())) {
@@ -37,10 +35,20 @@ function scheduledItemMatchExcludingArchived(
   base: Record<string, unknown>,
   archivedIds: mongoose.Types.ObjectId[]
 ): Record<string, unknown> {
-  if (archivedIds.length === 0) return base;
-  return {
+  const activeBase = {
     ...base,
-    $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }],
+    $and: [
+      ...(((base as any).$and as unknown[] | undefined) ?? []),
+      { $or: [{ completedAt: null }, { completedAt: { $exists: false } }] },
+    ],
+  };
+  if (archivedIds.length === 0) return activeBase;
+  return {
+    ...activeBase,
+    $and: [
+      ...(((activeBase as any).$and as unknown[] | undefined) ?? []),
+      { $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }] },
+    ],
   };
 }
 
@@ -139,9 +147,10 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const calendarMatch: Record<string, unknown> = {
         userId: userIdObj,
         startAt: { $gte: monthStart, $lt: monthEnd },
+        $and: [{ $or: [{ completedAt: null }, { completedAt: { $exists: false } }] }],
     };
     if (archivedIds.length > 0) {
-        (calendarMatch as any).$or = [{ applicationId: null }, { applicationId: { $nin: archivedIds } }];
+        (calendarMatch as any).$and.push({ $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }] });
     }
 
     const calendarDays = await ScheduledItem.aggregate([
