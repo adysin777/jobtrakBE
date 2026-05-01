@@ -402,3 +402,40 @@ export async function deleteArchivedApplicationForUser(
   notifyDashboardUpdate(userId, { internal: true });
   return true;
 }
+
+export async function patchScheduledItemCompletionForUser(
+  userId: string,
+  applicationId: string,
+  scheduledItemId: string,
+  completed: boolean
+): Promise<ApplicationEventScheduledItem | null> {
+  const appId = new mongoose.Types.ObjectId(applicationId);
+  const sid = new mongoose.Types.ObjectId(scheduledItemId);
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  const ownsApp = await Application.exists({ _id: appId, userId: userObjId });
+  if (!ownsApp) return null;
+
+  const scheduledItem = await ScheduledItem.findOne({
+    _id: sid,
+    userId: userObjId,
+    applicationId: appId,
+  });
+  if (!scheduledItem) return null;
+
+  scheduledItem.completedAt = completed ? new Date() : null;
+  await scheduledItem.save();
+  notifyDashboardUpdate(userId, { internal: true });
+
+  return {
+    id: (scheduledItem._id as mongoose.Types.ObjectId).toString(),
+    type: scheduledItem.type,
+    title: scheduledItem.title,
+    startAt: scheduledItem.startAt.toISOString(),
+    endAt: scheduledItem.endAt ? scheduledItem.endAt.toISOString() : undefined,
+    timezone: scheduledItem.timezone,
+    completedAt: scheduledItem.completedAt ? scheduledItem.completedAt.toISOString() : undefined,
+    notes: scheduledItem.notes,
+    links: Array.isArray(scheduledItem.links) ? scheduledItem.links : [],
+  };
+}

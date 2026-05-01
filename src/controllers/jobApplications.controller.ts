@@ -49,7 +49,7 @@ const patchEventSchema = z
   .strict()
   .refine((o) => Object.keys(o).length > 0, { message: "At least one field required" });
 
-const patchScheduledItemSchema = z
+const patchScheduledItemCompletionSchema = z
   .object({
     completed: z.boolean(),
   })
@@ -177,7 +177,7 @@ export async function patchApplicationEvent(req: Request, res: Response) {
   }
 }
 
-export async function patchScheduledItem(req: Request, res: Response) {
+export async function patchScheduledItemCompletion(req: Request, res: Response) {
   try {
     const userId = req.userId!;
     const applicationId = req.params.id;
@@ -185,10 +185,11 @@ export async function patchScheduledItem(req: Request, res: Response) {
     if (!applicationId || !scheduledItemId) {
       return res.status(400).json({ error: "Missing application or scheduled item id" });
     }
-    const parsed = patchScheduledItemSchema.safeParse(req.body);
+    const parsed = patchScheduledItemCompletionSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.flatten() });
     }
+
     const scheduledItem = await patchScheduledItemCompletionForUser(
       userId,
       applicationId,
@@ -200,7 +201,7 @@ export async function patchScheduledItem(req: Request, res: Response) {
     }
     return res.json({ scheduledItem });
   } catch (error) {
-    console.error("Patch scheduled item error:", error);
+    console.error("Patch scheduled item completion error:", error);
     return res.status(500).json({ error: String(error) });
   }
 }

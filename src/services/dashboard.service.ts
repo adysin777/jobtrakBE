@@ -4,6 +4,7 @@ import { User } from "../models/User";
 import { Application } from "../models/Application";
 import { ScheduledItem } from "../models/ScheduledItem"
 import { UserDailyStats } from "../models/UserDailyStats";
+import { UserDashboardStats, type ApplicationStatus } from "../models/UserDashboardStats";
 
 function toISO(d: Date) {
     if (!d || isNaN(d.getTime())) {
@@ -51,6 +52,41 @@ function scheduledItemMatchExcludingArchived(
   };
 }
 
+function mapScheduledItemToDashboardRow(x: any): DashboardResponse["upcoming"][number] {
+    return {
+        id: String(x._id),
+        type: x.type,
+        title: x.title,
+        startAt: toISO(new Date(x.startAt)),
+        endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
+        completedAt: x.completedAt ? toISO(new Date(x.completedAt)) : undefined,
+        duration: x.duration,
+        applicationId: x.applicationId ? String(x.applicationId) : undefined,
+        company: x.companyName ?? undefined,
+        role: x.roleTitle ?? undefined,
+        links: Array.isArray(x.links)
+            ? (x.links as { label: string; url: string }[]).map((l) => ({ label: l.label, url: l.url }))
+            : [],
+    };
+}
+
+function getStatusCount(counts: unknown, status: ApplicationStatus): number {
+    if (!counts) return 0;
+
+    // If map
+    if (counts instanceof Map) {
+        return Number(counts.get(status) ?? 0);
+    }
+
+    // If plain object
+    if (typeof counts === "object") {
+        const v = (counts as any)[status];
+        return Number(v ?? 0);
+    }
+
+    return 0;
+}
+
 export async function buildDashboard(userId: string): Promise<DashboardResponse> {
     const now = new Date();
     const month = now.toISOString().slice(0, 7); // YYYY-MM
@@ -67,13 +103,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const archivedIds = await archivedApplicationIds(userIdObj);
 
     const upcomingMatch = scheduledItemMatchExcludingArchived(
-        {
-            userId: userIdObj,
-            $or: [
-                { startAt: { $gte: now } },
-                { type: { $in: ["OA", "DEADLINE", "OTHER"] } },
-            ],
-        },
+        { userId: userIdObj, startAt: { $gte: now }, completedAt: null },
         archivedIds
     );
     const todayMatch = scheduledItemMatchExcludingArchived(
@@ -81,15 +111,33 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         archivedIds
     );
 
-    const [upcomingItems, todayItems, dailyStats, userDoc, statusCounts] = await Promise.all([
+    const upcomingOaMatch = { ...upcomingMatch, type: "OA" as const };
+    const upcomingInterviewMatch = { ...upcomingMatch, type: "INTERVIEW" as const };
+
+    const [
+        statsDoc,
+        upcomingItems,
+        todayItems,
+        dailyStats,
+        userDoc,
+        totalApps,
+        activeApps,
+        upcomingOaScheduledCount,
+        upcomingInterviewScheduledCount,
+    ] = await Promise.all([
+        UserDashboardStats.findOne({ userId }).lean(),
         ScheduledItem.find(upcomingMatch).sort({ startAt: 1 }).limit(10).lean(),
-        ScheduledItem.find(todayMatch).sort({ startAt: 1}).lean(),
+        ScheduledItem.find(todayMatch).sort({ startAt: 1 }).lean(),
         UserDailyStats.find({ userId }).sort({ day: 1 }).limit(450).lean(),
         User.findById(userId).select("connectedInboxes").lean(),
-        Application.aggregate([
-            { $match: { userId: userIdObj, archived: { $ne: true } } },
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-        ]),
+        Application.countDocuments({ userId: userIdObj, archived: { $ne: true } }),
+        Application.countDocuments({
+            userId: userIdObj,
+            archived: { $ne: true },
+            status: { $nin: ["OFFER", "REJECTED"] },
+        }),
+        ScheduledItem.countDocuments(upcomingOaMatch),
+        ScheduledItem.countDocuments(upcomingInterviewMatch),
     ])
 
     console.log(upcomingItems);
@@ -147,19 +195,16 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         { $sort: { date: 1 } },
       ]);
 
-    const countByStatus = new Map<string, number>(
-        (statusCounts as Array<{ _id: string; count: number }>).map((row) => [row._id, row.count])
-    );
-    const applied = countByStatus.get("APPLIED") ?? 0;
-    const oas = countByStatus.get("OA") ?? 0;
-    const interviews = countByStatus.get("INTERVIEW") ?? 0;
-    const offers = countByStatus.get("OFFER") ?? 0;
-    const rejected = countByStatus.get("REJECTED") ?? 0;
+    /** Upcoming scheduled slots (same filter as dashboard `upcoming` list), not application-stage totals. */
+    const oas = upcomingOaScheduledCount;
+    const interviews = upcomingInterviewScheduledCount;
+    const offers = getStatusCount(statsDoc?.countsByStatus, "OFFER");
+    const rejected = getStatusCount(statsDoc?.countsByStatus, "REJECTED");
 
-    // Stable distinct-application total.
-    const total = applied + oas + interviews + offers + rejected;
-
-    const active = applied + oas + interviews;
+    // All non-archived applications (includes offer/rejected).
+    const total = totalApps;
+    /** In pipeline: not archived and not terminal offer/rejection. */
+    const active = activeApps;
 
     const counts = {
         total,
@@ -167,20 +212,10 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         offers,
         rejected,
         interviews,
-        oas
+        oas,
     };
 
-    const upcoming: DashboardResponse["upcoming"] = (upcomingItems ?? []).map((x: any) => ({
-        id: String(x._id),
-        type: x.type,
-        title: x.title,
-        startAt: toISO(new Date(x.startAt)),
-        endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
-        duration: x.duration,
-        applicationId: x.applicationId ? String(x.applicationId) : undefined,
-        company: x.companyName ?? undefined,
-        role: x.roleTitle ?? undefined,
-    }));
+    const upcoming: DashboardResponse["upcoming"] = (upcomingItems ?? []).map(mapScheduledItemToDashboardRow);
 
     const graph: DashboardResponse["graph"] = (dailyStats ?? []).map((d: any) => {
         const dayStr = typeof d.day === "string" ? d.day : ymd(d.day);
@@ -201,17 +236,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
 
     const today: DashboardResponse["today"] = {
         date: ymd(now),
-        items: (todayItems ?? []).map((x: any) => ({
-            id: String(x._id),
-            type: x.type,
-            title: x.title,
-            startAt: toISO(new Date(x.startAt)),
-            endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
-            duration: x.duration,
-            applicationId: x.applicationId ? String(x.applicationId) : undefined,
-            company: x.companyName ?? undefined,
-            role: x.roleTitle ?? undefined,
-        })),
+        items: (todayItems ?? []).map(mapScheduledItemToDashboardRow),
     };
 
     return { counts, upcoming, graph, calendarMonth, today, connectedInboxCount };
@@ -242,17 +267,7 @@ export async function getTimelineForDate(
         .lean();
     return {
         date: dateStr,
-        items: (items as any[]).map((x) => ({
-            id: String(x._id),
-            type: x.type,
-            title: x.title,
-            startAt: toISO(new Date(x.startAt)),
-            endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
-            duration: x.duration,
-            applicationId: x.applicationId ? String(x.applicationId) : undefined,
-            company: x.companyName ?? undefined,
-            role: x.roleTitle ?? undefined,
-        })),
+        items: (items as any[]).map(mapScheduledItemToDashboardRow),
     };
 }
 

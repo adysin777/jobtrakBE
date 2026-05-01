@@ -24,6 +24,7 @@ export interface IScheduledItem extends Document {
     endAt?: Date;
     duration?: number;
     timezone: string;
+    completedAt?: Date | null;
 
     notes?: string;
     links: IScheduledItemLink[];
@@ -95,6 +96,7 @@ const scheduledItemSchema = new Schema<IScheduledItem>(
         endAt: { type: Date},
         duration: { type: Number },
         timezone: { type: String, required: true, default: "EST" },
+        completedAt: { type: Date, default: null },
 
         notes: { type: String, trim: true },
         links: { type: [linkSchema], default: [] },
