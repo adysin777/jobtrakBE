@@ -9,6 +9,12 @@ export interface IScheduledItemLink {
     url: string;
 }
 
+export interface IGoogleScheduledItemSyncState {
+    eventId: string;
+    etag?: string;
+    updatedAt?: Date;
+}
+
 export interface IScheduledItem extends Document {
     userId: Types.ObjectId;
     /** Set when event is assigned to an application; null until then for auto-created items */
@@ -24,7 +30,6 @@ export interface IScheduledItem extends Document {
     endAt?: Date;
     duration?: number;
     timezone: string;
-    completedAt?: Date | null;
 
     notes?: string;
     links: IScheduledItemLink[];
@@ -39,7 +44,7 @@ export interface IScheduledItem extends Document {
         messageId?: string;
         threadId: string;
     };
-
+    googleSync?: Map<string, IGoogleScheduledItemSyncState>;
     completedAt?: Date | null;
 
     createdAt: Date;
@@ -60,6 +65,15 @@ const sourceMetaSchema = new Schema(
         inboxEmail: { type: String, lowercase: true, trim: true },
         messageId: { type: String, trim: true },
         threadId: { type: String, trim: true },
+    },
+    { _id: false }
+);
+
+const googleSyncStateSchema = new Schema<IGoogleScheduledItemSyncState>(
+    {
+        eventId: { type: String, required: true, trim: true },
+        etag: { type: String, trim: true },
+        updatedAt: { type: Date, default: Date.now },
     },
     { _id: false }
 );
@@ -96,7 +110,6 @@ const scheduledItemSchema = new Schema<IScheduledItem>(
         endAt: { type: Date},
         duration: { type: Number },
         timezone: { type: String, required: true, default: "EST" },
-        completedAt: { type: Date, default: null },
 
         notes: { type: String, trim: true },
         links: { type: [linkSchema], default: [] },
@@ -113,6 +126,10 @@ const scheduledItemSchema = new Schema<IScheduledItem>(
         },
 
         sourceMeta: { type: sourceMetaSchema },
+        googleSync: {
+            type: Map,
+            of: googleSyncStateSchema,
+        },
         completedAt: { type: Date, default: null, index: true },
     },
     { timestamps: true }

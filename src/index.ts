@@ -21,6 +21,7 @@ import cors from 'cors'
 const allowedOrigins = [
     "http://localhost:5173", // Vite
     "http://localhost:3000", // if you ever use CRA/Next dev
+    ...config.corsAllowedOrigins,
 ];
 
 const app = express();

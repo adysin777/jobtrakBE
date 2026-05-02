@@ -94,11 +94,17 @@ const ingestEventJsonSchema = {
           },
           links: {
             type: "array",
+            description:
+              "Meeting/OA URLs only if they appear verbatim in the email (http/https). Omit the entire links array if none—never placeholders like [link] or invented URLs.",
             items: {
               type: "object",
               properties: {
                 label: { type: "string" },
-                url: { type: "string" },
+                url: {
+                  type: "string",
+                  description:
+                    "Full http(s) URL copied exactly from the email. Do not output placeholder text; omit this link object if no real URL exists in the body.",
+                },
               },
               required: ["label", "url"],
               additionalProperties: false,
@@ -204,6 +210,11 @@ IMPORTANT: If the email mentions scheduling an interview, it IS job-related. Ext
 - If a "confirm interview time" / RSVP / reply action has no confirmation cutoff, use scheduledItems[].type OTHER and use the email received time as startAt unless the email gives a better action time. If it has a cutoff ("confirm by EOD Friday"), use DEADLINE.
 - AI summary: Brief summary of the email content
 
+LINKS (scheduledItems.links):
+- Only include a link when a real URL appears in the email body (or headers quoted in the body), e.g. https://meet.google.com/...
+- Copy the URL exactly. Never invent, guess, or paraphrase URLs.
+- Never use placeholders (e.g. "[Link to the meeting]", "see calendar", "TBD") as url—omit the links array entirely, or omit individual link objects, if no URL is present. Calendar invites often say "link in invite" without the URL in text: in that case leave links out.
+
 DATE PARSING RULES:
 - The email was received at: ${receivedAtReadable} (${receivedAtISO})
 - Use this as your reference point for relative dates
@@ -298,6 +309,16 @@ If multiple scheduled/actionable times appear, scheduledItems must have one entr
       return dateStr;
     };
 
+    const isValidHttpUrl = (value: unknown): boolean => {
+      if (typeof value !== "string") return false;
+      try {
+        const u = new URL(value.trim());
+        return u.protocol === "http:" || u.protocol === "https:";
+      } catch {
+        return false;
+      }
+    };
+
     // Build EventPayload (userId set by caller). Derive status from eventType so OA/INTERVIEW/OFFER/REJECTION advance the application.
     const eventType = parsed.eventType ?? statusToEventType(parsed.status);
     const status = eventTypeToStatus(eventType, parsed.status as EventPayload["status"]);
@@ -318,6 +339,15 @@ If multiple scheduled/actionable times appear, scheduledItems must have one entr
       scheduledItems: parsed.scheduledItems?.map((item: any) => {
         const normalizedStart = normalizeDateTime(item.startAt)!;
         const normalizedEnd = item.endAt ? normalizeDateTime(item.endAt) : undefined;
+        const links = Array.isArray(item.links)
+          ? item.links.filter(
+              (l: any) =>
+                l &&
+                typeof l.label === "string" &&
+                typeof l.url === "string" &&
+                isValidHttpUrl(l.url)
+            )
+          : undefined;
         return {
           type: normalizeScheduledItemType(item.type, eventType, item),
           title: item.title,
@@ -325,7 +355,7 @@ If multiple scheduled/actionable times appear, scheduledItems must have one entr
           endAt: normalizedEnd ? validateDate(normalizedEnd, "endAt") : undefined,
           duration: item.duration,
           companyName: item.companyName,
-          links: item.links,
+          links: links?.length ? links : undefined,
           notes: item.notes,
         };
       }),

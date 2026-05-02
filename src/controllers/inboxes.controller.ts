@@ -1,6 +1,14 @@
 import { Request, Response } from "express";
 import { connectGmailService, gmailCallbackService, disconnectInboxService, listInboxesService } from "../services/inboxes.service";
 import { notifyDashboardUpdate } from "../services/sse.service";
+import { getUserIdFromCalendarState, googleCalendarCallbackService } from "../services/googleCalendar.service";
+import {
+    calendarErrorPageUrl,
+    calendarFailureReasonFromError,
+    googleOAuthQueryReason,
+    inboxErrorPageUrl,
+    inboxFailureReasonFromError,
+} from "../utils/googleOAuthErrors";
 
 export async function connectGmail(req: Request, res: Response) {
     try {
@@ -15,11 +23,27 @@ export async function connectGmail(req: Request, res: Response) {
 
 export async function gmailCallback(req: Request, res: Response) {
     try {
-        const code = req.query.code as string;
-        const state = req.query.state as string;
+        const oauthError = req.query.error as string | undefined;
+        const code = req.query.code as string | undefined;
+        const state = req.query.state as string | undefined;
+        const calendarUserId = getUserIdFromCalendarState(state);
+
+        if (calendarUserId) {
+            if (oauthError || !code) {
+                const reason = oauthError ? googleOAuthQueryReason(oauthError) : "missing_code";
+                return res.redirect(calendarErrorPageUrl(reason));
+            }
+            await googleCalendarCallbackService(calendarUserId, code);
+            notifyDashboardUpdate(calendarUserId);
+            return res.redirect(`${process.env.FRONTEND_URL || "http://localhost:5173"}/calendar-connected`);
+        }
+
+        if (oauthError) {
+            return res.redirect(inboxErrorPageUrl(googleOAuthQueryReason(oauthError)));
+        }
 
         if (!code || !state) {
-            return res.status(400).json({ error: "Missing code or state" });
+            return res.redirect(inboxErrorPageUrl("missing_code"));
         }
 
         await gmailCallbackService(state, code);
@@ -28,7 +52,12 @@ export async function gmailCallback(req: Request, res: Response) {
         return res.redirect(`${process.env.FRONTEND_URL || "http://localhost:5173"}/inbox-connected`);
     } catch (error) {
         console.error("Gmail callback error:", error);
-        return res.redirect(`${process.env.FRONTEND_URL || "http://localhost:5173"}/inbox-connected?error=1`);
+        const stateParam = req.query.state as string | undefined;
+        const calendarUserId = getUserIdFromCalendarState(stateParam);
+        if (calendarUserId) {
+            return res.redirect(calendarErrorPageUrl(calendarFailureReasonFromError(error)));
+        }
+        return res.redirect(inboxErrorPageUrl(inboxFailureReasonFromError(error)));
     }
 }
 
