@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
-export type ScheduledItemType = "OA" | "INTERVIEW";
+export type ScheduledItemType = "OA" | "INTERVIEW" | "DEADLINE" | "OTHER";
 
 export type ScheduledItemSource = "auto" | "manual";
 
@@ -45,6 +45,7 @@ export interface IScheduledItem extends Document {
         threadId: string;
     };
     googleSync?: Map<string, IGoogleScheduledItemSyncState>;
+    completedAt?: Date | null;
 
     createdAt: Date;
     updatedAt: Date;
@@ -99,7 +100,7 @@ const scheduledItemSchema = new Schema<IScheduledItem>(
         },
         type: {
             type: String,
-            enum: ["OA", "INTERVIEW"],
+            enum: ["OA", "INTERVIEW", "DEADLINE", "OTHER"],
             required: true,
             index: true,
         },
@@ -129,6 +130,7 @@ const scheduledItemSchema = new Schema<IScheduledItem>(
             type: Map,
             of: googleSyncStateSchema,
         },
+        completedAt: { type: Date, default: null, index: true },
     },
     { timestamps: true }
 );

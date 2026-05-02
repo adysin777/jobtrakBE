@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { EventPayloadSchema, type EventPayload } from "../types/event.types";
+import { EventPayloadSchema, type EventPayload, type EventScheduledItem } from "../types/event.types";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -12,7 +12,7 @@ interface EmailData {
   userEmail: string;
   userId?: string;
   provider: "gmail" | "outlook";
-  inboxEmail: string;
+  inboxEmail?: string;
   messageId: string;
   threadId?: string;
   receivedAt: string;
@@ -64,14 +64,14 @@ const ingestEventJsonSchema = {
     scheduledItems: {
       type: "array",
       description:
-        "One entry per distinct OA/interview start time. If the email lists multiple times (e.g. two sessions, two rounds, different days), output that many objects—never merge into one.",
+        "One entry per distinct scheduled/actionable item. Use OA/INTERVIEW for those stages, DEADLINE for due-by tasks, and OTHER for non-stage calendar/action items.",
       items: {
         type: "object",
-        description: "A single OA or interview calendar slot.",
+        description: "A single scheduled/actionable item.",
         properties: {
           type: {
             type: "string",
-            enum: ["OA", "INTERVIEW"],
+            enum: ["OA", "INTERVIEW", "DEADLINE", "OTHER"],
           },
           title: {
             type: "string",
@@ -147,6 +147,27 @@ function eventTypeToStatus(eventType: EventPayload["eventType"], fallback: Event
   return (m[eventType] ?? fallback) as EventPayload["status"];
 }
 
+type ScheduledItemPayloadType = EventScheduledItem["type"];
+
+function normalizeScheduledItemType(rawType: unknown, eventType: EventPayload["eventType"], item: any): ScheduledItemPayloadType {
+  const normalized = typeof rawType === "string" ? rawType.toUpperCase() : "";
+  if (normalized === "OA" || normalized === "INTERVIEW" || normalized === "DEADLINE" || normalized === "OTHER") {
+    return normalized;
+  }
+
+  const text = `${item?.title ?? ""} ${item?.notes ?? ""}`.toLowerCase();
+  const looksDueBy = /\b(by|due|deadline|before|within|submit|upload|complete|sign)\b/.test(text);
+  if (normalized === "ACTION_REQUIRED" && looksDueBy) return "DEADLINE";
+
+  // OTHER_UPDATE/UPDATE/ACTION_REQUIRED are event categories, not scheduled item categories.
+  if (normalized === "OTHER_UPDATE" || normalized === "UPDATE" || normalized === "ACTION_REQUIRED") {
+    return "OTHER";
+  }
+
+  if (eventType === "ACTION_REQUIRED" && looksDueBy) return "DEADLINE";
+  return "OTHER";
+}
+
 export async function extractJobEventFromEmail(email: EmailData): Promise<EventPayload | null> {
   const receivedAtDate = new Date(email.receivedAt);
   const receivedAtISO = receivedAtDate.toISOString();
@@ -184,7 +205,9 @@ IMPORTANT: If the email mentions scheduling an interview, it IS job-related. Ext
 - Prefer ACTION_REQUIRED when user must do a general action that doesn't fit OA/INTERVIEW (e.g. verify email, upload transcript, submit profile/documents, pick new time link without explicit interview scheduling context)
 - Use RESCHEDULE only when the email explicitly changes schedule/time for an existing OA/interview
 - Use OTHER_UPDATE only as a legacy fallback; prefer UPDATE
-- Scheduled items: Extract interviews/OAs with dates/times. If the email gives multiple distinct times (including two sessions on the same day), output multiple scheduledItems—one per time. Do not collapse two times into one item.
+- Scheduled items: Extract OA, interview, deadline, and other actionable items with concrete dates/times. If the email gives multiple distinct times (including two sessions, two rounds, different days, or separate tasks), output multiple scheduledItems—one per time/action. Do not collapse two times into one item.
+- scheduledItems[].type: OA for online assessments; INTERVIEW for recruiting interviews; DEADLINE for due-by tasks such as uploading documents, signing forms, completing onboarding/background checks by a stated cutoff; OTHER for fixed non-stage meetings or open-ended actions with no explicit due date (e.g. "confirm your interview time", RSVP, reply with availability).
+- If a "confirm interview time" / RSVP / reply action has no confirmation cutoff, use scheduledItems[].type OTHER and use the email received time as startAt unless the email gives a better action time. If it has a cutoff ("confirm by EOD Friday"), use DEADLINE.
 - AI summary: Brief summary of the email content
 
 LINKS (scheduledItems.links):
@@ -211,9 +234,7 @@ ${email.body}
 
 Extract job application information from this email. If it's not job-related, set isJobRelated to false.
 
-If multiple interview/OA times appear, scheduledItems must have one entry per distinct start time.
-
-Do not add scheduledItems.links unless the email contains an actual http(s) URL for that item; never use fake or placeholder URLs.`;
+If multiple scheduled/actionable times appear, scheduledItems must have one entry per distinct start time/action.`;
 
   try {
     const completion = await openai.chat.completions.create({
@@ -301,11 +322,12 @@ Do not add scheduledItems.links unless the email contains an actual http(s) URL 
     // Build EventPayload (userId set by caller). Derive status from eventType so OA/INTERVIEW/OFFER/REJECTION advance the application.
     const eventType = parsed.eventType ?? statusToEventType(parsed.status);
     const status = eventTypeToStatus(eventType, parsed.status as EventPayload["status"]);
+    const inboxEmail = email.inboxEmail ?? email.userEmail;
     const payload: EventPayload = {
       userId: "", // caller must set
       userEmail: email.userEmail,
       provider: email.provider,
-      inboxEmail: email.inboxEmail,
+      inboxEmail,
       messageId: email.messageId,
       threadId: email.threadId,
       receivedAt: email.receivedAt,
@@ -327,7 +349,7 @@ Do not add scheduledItems.links unless the email contains an actual http(s) URL 
             )
           : undefined;
         return {
-          type: item.type,
+          type: normalizeScheduledItemType(item.type, eventType, item),
           title: item.title,
           startAt: validateDate(normalizedStart, "startAt"),
           endAt: normalizedEnd ? validateDate(normalizedEnd, "endAt") : undefined,

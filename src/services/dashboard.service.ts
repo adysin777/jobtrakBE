@@ -1,12 +1,10 @@
 import mongoose from "mongoose";
 import type { DashboardResponse } from "../types/dashboard.types";
 import { User } from "../models/User";
-import { UserDashboardStats } from "../models/UserDashboardStats";
 import { Application } from "../models/Application";
 import { ScheduledItem } from "../models/ScheduledItem"
 import { UserDailyStats } from "../models/UserDailyStats";
-
-import type { ApplicationStatus } from "../models/UserDashboardStats";
+import { UserDashboardStats, type ApplicationStatus } from "../models/UserDashboardStats";
 
 function toISO(d: Date) {
     if (!d || isNaN(d.getTime())) {
@@ -37,11 +35,39 @@ function scheduledItemMatchExcludingArchived(
   base: Record<string, unknown>,
   archivedIds: mongoose.Types.ObjectId[]
 ): Record<string, unknown> {
-  if (archivedIds.length === 0) return base;
-  return {
+  const activeBase = {
     ...base,
-    $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }],
+    $and: [
+      ...(((base as any).$and as unknown[] | undefined) ?? []),
+      { $or: [{ completedAt: null }, { completedAt: { $exists: false } }] },
+    ],
   };
+  if (archivedIds.length === 0) return activeBase;
+  return {
+    ...activeBase,
+    $and: [
+      ...(((activeBase as any).$and as unknown[] | undefined) ?? []),
+      { $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }] },
+    ],
+  };
+}
+
+function mapScheduledItemToDashboardRow(x: any): DashboardResponse["upcoming"][number] {
+    return {
+        id: String(x._id),
+        type: x.type,
+        title: x.title,
+        startAt: toISO(new Date(x.startAt)),
+        endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
+        completedAt: x.completedAt ? toISO(new Date(x.completedAt)) : undefined,
+        duration: x.duration,
+        applicationId: x.applicationId ? String(x.applicationId) : undefined,
+        company: x.companyName ?? undefined,
+        role: x.roleTitle ?? undefined,
+        links: Array.isArray(x.links)
+            ? (x.links as { label: string; url: string }[]).map((l) => ({ label: l.label, url: l.url }))
+            : [],
+    };
 }
 
 function getStatusCount(counts: unknown, status: ApplicationStatus): number {
@@ -77,7 +103,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const archivedIds = await archivedApplicationIds(userIdObj);
 
     const upcomingMatch = scheduledItemMatchExcludingArchived(
-        { userId: userIdObj, startAt: { $gte: now } },
+        { userId: userIdObj, startAt: { $gte: now }, completedAt: null },
         archivedIds
     );
     const todayMatch = scheduledItemMatchExcludingArchived(
@@ -85,13 +111,33 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         archivedIds
     );
 
-    const [statsDoc, upcomingItems, todayItems, dailyStats, userDoc, totalApps] = await Promise.all([
+    const upcomingOaMatch = { ...upcomingMatch, type: "OA" as const };
+    const upcomingInterviewMatch = { ...upcomingMatch, type: "INTERVIEW" as const };
+
+    const [
+        statsDoc,
+        upcomingItems,
+        todayItems,
+        dailyStats,
+        userDoc,
+        totalApps,
+        activeApps,
+        upcomingOaScheduledCount,
+        upcomingInterviewScheduledCount,
+    ] = await Promise.all([
         UserDashboardStats.findOne({ userId }).lean(),
         ScheduledItem.find(upcomingMatch).sort({ startAt: 1 }).limit(10).lean(),
-        ScheduledItem.find(todayMatch).sort({ startAt: 1}).lean(),
+        ScheduledItem.find(todayMatch).sort({ startAt: 1 }).lean(),
         UserDailyStats.find({ userId }).sort({ day: 1 }).limit(450).lean(),
         User.findById(userId).select("connectedInboxes").lean(),
         Application.countDocuments({ userId: userIdObj, archived: { $ne: true } }),
+        Application.countDocuments({
+            userId: userIdObj,
+            archived: { $ne: true },
+            status: { $nin: ["OFFER", "REJECTED"] },
+        }),
+        ScheduledItem.countDocuments(upcomingOaMatch),
+        ScheduledItem.countDocuments(upcomingInterviewMatch),
     ])
 
     console.log(upcomingItems);
@@ -101,9 +147,10 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const calendarMatch: Record<string, unknown> = {
         userId: userIdObj,
         startAt: { $gte: monthStart, $lt: monthEnd },
+        $and: [{ $or: [{ completedAt: null }, { completedAt: { $exists: false } }] }],
     };
     if (archivedIds.length > 0) {
-        (calendarMatch as any).$or = [{ applicationId: null }, { applicationId: { $nin: archivedIds } }];
+        (calendarMatch as any).$and.push({ $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }] });
     }
 
     const calendarDays = await ScheduledItem.aggregate([
@@ -148,16 +195,16 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         { $sort: { date: 1 } },
       ]);
 
-    const applied = getStatusCount(statsDoc?.countsByStatus, "APPLIED");
-    const oas = getStatusCount(statsDoc?.countsByStatus, "OA");
-    const interviews = getStatusCount(statsDoc?.countsByStatus, "INTERVIEW");
+    /** Upcoming scheduled slots (same filter as dashboard `upcoming` list), not application-stage totals. */
+    const oas = upcomingOaScheduledCount;
+    const interviews = upcomingInterviewScheduledCount;
     const offers = getStatusCount(statsDoc?.countsByStatus, "OFFER");
     const rejected = getStatusCount(statsDoc?.countsByStatus, "REJECTED");
 
-    // Stable distinct-application total.
+    // All non-archived applications (includes offer/rejected).
     const total = totalApps;
-
-    const active = statsDoc?.activeCount ?? 0;
+    /** In pipeline: not archived and not terminal offer/rejection. */
+    const active = activeApps;
 
     const counts = {
         total,
@@ -165,20 +212,10 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         offers,
         rejected,
         interviews,
-        oas
+        oas,
     };
 
-    const upcoming: DashboardResponse["upcoming"] = (upcomingItems ?? []).map((x: any) => ({
-        id: String(x._id),
-        type: x.type,
-        title: x.title,
-        startAt: toISO(new Date(x.startAt)),
-        endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
-        duration: x.duration,
-        applicationId: x.applicationId ? String(x.applicationId) : undefined,
-        company: x.companyName ?? undefined,
-        role: x.roleTitle ?? undefined,
-    }));
+    const upcoming: DashboardResponse["upcoming"] = (upcomingItems ?? []).map(mapScheduledItemToDashboardRow);
 
     const graph: DashboardResponse["graph"] = (dailyStats ?? []).map((d: any) => {
         const dayStr = typeof d.day === "string" ? d.day : ymd(d.day);
@@ -199,17 +236,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
 
     const today: DashboardResponse["today"] = {
         date: ymd(now),
-        items: (todayItems ?? []).map((x: any) => ({
-            id: String(x._id),
-            type: x.type,
-            title: x.title,
-            startAt: toISO(new Date(x.startAt)),
-            endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
-            duration: x.duration,
-            applicationId: x.applicationId ? String(x.applicationId) : undefined,
-            company: x.companyName ?? undefined,
-            role: x.roleTitle ?? undefined,
-        })),
+        items: (todayItems ?? []).map(mapScheduledItemToDashboardRow),
     };
 
     return { counts, upcoming, graph, calendarMonth, today, connectedInboxCount };
@@ -240,17 +267,7 @@ export async function getTimelineForDate(
         .lean();
     return {
         date: dateStr,
-        items: (items as any[]).map((x) => ({
-            id: String(x._id),
-            type: x.type,
-            title: x.title,
-            startAt: toISO(new Date(x.startAt)),
-            endAt: x.endAt ? toISO(new Date(x.endAt)) : undefined,
-            duration: x.duration,
-            applicationId: x.applicationId ? String(x.applicationId) : undefined,
-            company: x.companyName ?? undefined,
-            role: x.roleTitle ?? undefined,
-        })),
+        items: (items as any[]).map(mapScheduledItemToDashboardRow),
     };
 }
 

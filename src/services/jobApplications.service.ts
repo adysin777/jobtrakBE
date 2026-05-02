@@ -124,11 +124,12 @@ export async function listApplicationsService(
 
 export interface ApplicationEventScheduledItem {
   id: string;
-  type: "OA" | "INTERVIEW";
+  type: "OA" | "INTERVIEW" | "DEADLINE" | "OTHER";
   title: string;
   startAt: string;
   endAt?: string;
   timezone: string;
+  completedAt?: string;
   notes?: string;
   links: { label: string; url: string }[];
 }
@@ -193,6 +194,7 @@ export async function getApplicationEventsService(
       startAt: si.startAt.toISOString(),
       endAt: si.endAt ? si.endAt.toISOString() : undefined,
       timezone: si.timezone,
+      completedAt: si.completedAt ? si.completedAt.toISOString() : undefined,
       notes: si.notes,
       links: Array.isArray(si.links) ? si.links : [],
     }));
@@ -270,6 +272,43 @@ export interface PatchApplicationEventInput {
   status?: EventStatus;
   receivedAt?: string;
   aiSummary?: string | null;
+}
+
+export async function patchScheduledItemCompletionForUser(
+  userId: string,
+  applicationId: string,
+  scheduledItemId: string,
+  completed: boolean
+): Promise<ApplicationEventScheduledItem | null> {
+  const appId = new mongoose.Types.ObjectId(applicationId);
+  const itemId = new mongoose.Types.ObjectId(scheduledItemId);
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  const ownsApp = await Application.exists({ _id: appId, userId: userObjId });
+  if (!ownsApp) return null;
+
+  const item = await ScheduledItem.findOne({
+    _id: itemId,
+    userId: userObjId,
+    applicationId: appId,
+  });
+  if (!item) return null;
+
+  item.completedAt = completed ? new Date() : null;
+  await item.save();
+  notifyDashboardUpdate(userId, { applicationId, internal: true });
+
+  return {
+    id: item._id.toString(),
+    type: item.type,
+    title: item.title,
+    startAt: item.startAt.toISOString(),
+    endAt: item.endAt ? item.endAt.toISOString() : undefined,
+    timezone: item.timezone,
+    completedAt: item.completedAt ? item.completedAt.toISOString() : undefined,
+    notes: item.notes,
+    links: Array.isArray(item.links) ? item.links : [],
+  };
 }
 
 export async function patchApplicationEventForUser(
@@ -393,4 +432,41 @@ export async function deleteArchivedApplicationForUser(
 
   notifyDashboardUpdate(userId, { internal: true });
   return true;
+}
+
+export async function patchScheduledItemCompletionForUser(
+  userId: string,
+  applicationId: string,
+  scheduledItemId: string,
+  completed: boolean
+): Promise<ApplicationEventScheduledItem | null> {
+  const appId = new mongoose.Types.ObjectId(applicationId);
+  const sid = new mongoose.Types.ObjectId(scheduledItemId);
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  const ownsApp = await Application.exists({ _id: appId, userId: userObjId });
+  if (!ownsApp) return null;
+
+  const scheduledItem = await ScheduledItem.findOne({
+    _id: sid,
+    userId: userObjId,
+    applicationId: appId,
+  });
+  if (!scheduledItem) return null;
+
+  scheduledItem.completedAt = completed ? new Date() : null;
+  await scheduledItem.save();
+  notifyDashboardUpdate(userId, { internal: true });
+
+  return {
+    id: (scheduledItem._id as mongoose.Types.ObjectId).toString(),
+    type: scheduledItem.type,
+    title: scheduledItem.title,
+    startAt: scheduledItem.startAt.toISOString(),
+    endAt: scheduledItem.endAt ? scheduledItem.endAt.toISOString() : undefined,
+    timezone: scheduledItem.timezone,
+    completedAt: scheduledItem.completedAt ? scheduledItem.completedAt.toISOString() : undefined,
+    notes: scheduledItem.notes,
+    links: Array.isArray(scheduledItem.links) ? scheduledItem.links : [],
+  };
 }

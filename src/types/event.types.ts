@@ -17,11 +17,11 @@ export const EventTypeSchema = z.enum([
 export type EventType = z.infer<typeof EventTypeSchema>;
 
 /**
- * Actionables with a date (OA, interview). Payload shape for creating ScheduledItem docs (eventId set, applicationId null).
+ * Calendar/action rows created from job events. These are distinct from eventType.
  * RESCHEDULE is an event type only: when we get a RESCHEDULE event, we find the existing OA/INTERVIEW ScheduledItem and update its startAt/endAt.
  */
 export const EventScheduledItemSchema = z.object({
-    type: z.enum(["OA", "INTERVIEW"]),
+    type: z.enum(["OA", "INTERVIEW", "DEADLINE", "OTHER"]),
     title: z.string(),
     startAt: z.string().datetime(),
     endAt: z.string().datetime().optional(),
