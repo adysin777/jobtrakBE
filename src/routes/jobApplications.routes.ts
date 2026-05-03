@@ -5,7 +5,9 @@ import {
   getApplicationEvents,
   patchApplication,
   patchApplicationEvent,
-  patchScheduledItemCompletion,
+  createScheduledItem,
+  deleteScheduledItem,
+  patchScheduledItem,
   deleteApplicationEvent,
   deleteApplication,
 } from "../controllers/jobApplications.controller";
@@ -13,9 +15,11 @@ import {
 const router = Router();
 router.get("/", requireUser, listApplications);
 router.delete("/:id/events/:eventId", requireUser, deleteApplicationEvent);
+router.delete("/:id/scheduled-items/:scheduledItemId", requireUser, deleteScheduledItem);
 router.delete("/:id", requireUser, deleteApplication);
 router.patch("/:id/events/:eventId", requireUser, patchApplicationEvent);
-router.patch("/:id/scheduled-items/:scheduledItemId", requireUser, patchScheduledItemCompletion);
+router.post("/:id/events/:eventId/scheduled-items", requireUser, createScheduledItem);
+router.patch("/:id/scheduled-items/:scheduledItemId", requireUser, patchScheduledItem);
 router.get("/:id/events", requireUser, getApplicationEvents);
 router.patch("/:id", requireUser, patchApplication);
 export default router;
