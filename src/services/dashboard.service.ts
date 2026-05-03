@@ -52,6 +52,43 @@ function scheduledItemMatchExcludingArchived(
   };
 }
 
+const dueDateScheduledItemTypes = ["OA", "DEADLINE", "OTHER"] as const;
+
+function upcomingScheduledItemMatch(now: Date): Record<string, unknown> {
+    return {
+        $or: [
+            { type: "INTERVIEW", startAt: { $gte: now } },
+            {
+                type: { $in: dueDateScheduledItemTypes },
+                $or: [
+                    { endAt: { $gte: now } },
+                    { endAt: null },
+                    { endAt: { $exists: false } },
+                ],
+            },
+        ],
+    };
+}
+
+function calendarScheduledItemMatch(start: Date, end: Date): Record<string, unknown> {
+    return {
+        $or: [
+            { type: "INTERVIEW", startAt: { $gte: start, $lt: end } },
+            { type: { $in: dueDateScheduledItemTypes }, endAt: { $gte: start, $lt: end } },
+        ],
+    };
+}
+
+function dashboardEffectiveDateExpression() {
+    return {
+        $cond: [
+            { $eq: ["$type", "INTERVIEW"] },
+            "$startAt",
+            "$endAt",
+        ],
+    };
+}
+
 function mapScheduledItemToDashboardRow(x: any): DashboardResponse["upcoming"][number] {
     return {
         id: String(x._id),
@@ -92,7 +129,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const month = now.toISOString().slice(0, 7); // YYYY-MM
     const monthStart = new Date(`${month}-01T00:00:00.000Z`);
     const monthEnd = new Date(monthStart);
-    monthEnd.setMonth(monthEnd.getMonth() + 1);
+    monthEnd.setMonth(monthEnd.getMonth() + 12);
 
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
@@ -103,11 +140,11 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     const archivedIds = await archivedApplicationIds(userIdObj);
 
     const upcomingMatch = scheduledItemMatchExcludingArchived(
-        { userId: userIdObj, startAt: { $gte: now }, completedAt: null },
+        { userId: userIdObj, ...upcomingScheduledItemMatch(now) },
         archivedIds
     );
     const todayMatch = scheduledItemMatchExcludingArchived(
-        { userId: userIdObj, startAt: { $gte: start, $lt: end } },
+        { userId: userIdObj, ...calendarScheduledItemMatch(start, end) },
         archivedIds
     );
 
@@ -126,8 +163,18 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
         upcomingInterviewScheduledCount,
     ] = await Promise.all([
         UserDashboardStats.findOne({ userId }).lean(),
-        ScheduledItem.find(upcomingMatch).sort({ startAt: 1 }).limit(10).lean(),
-        ScheduledItem.find(todayMatch).sort({ startAt: 1 }).lean(),
+        ScheduledItem.aggregate([
+            { $match: upcomingMatch },
+            { $addFields: { dashboardDate: dashboardEffectiveDateExpression() } },
+            { $addFields: { undatedSort: { $cond: [{ $eq: ["$dashboardDate", null] }, 1, 0] } } },
+            { $sort: { undatedSort: 1, dashboardDate: 1, startAt: 1 } },
+            { $limit: 50 },
+        ]),
+        ScheduledItem.aggregate([
+            { $match: todayMatch },
+            { $addFields: { dashboardDate: dashboardEffectiveDateExpression() } },
+            { $sort: { dashboardDate: 1, startAt: 1 } },
+        ]),
         UserDailyStats.find({ userId }).sort({ day: 1 }).limit(450).lean(),
         User.findById(userId).select("connectedInboxes").lean(),
         Application.countDocuments({ userId: userIdObj, archived: { $ne: true } }),
@@ -144,25 +191,26 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
 
     const connectedInboxCount = (userDoc as any)?.connectedInboxes?.filter((i: any) => i.status === "connected").length ?? 0;
 
-    const calendarMatch: Record<string, unknown> = {
-        userId: userIdObj,
-        startAt: { $gte: monthStart, $lt: monthEnd },
-        $and: [{ $or: [{ completedAt: null }, { completedAt: { $exists: false } }] }],
-    };
-    if (archivedIds.length > 0) {
-        (calendarMatch as any).$and.push({ $or: [{ applicationId: null }, { applicationId: { $nin: archivedIds } }] });
-    }
+    const calendarMatch = scheduledItemMatchExcludingArchived(
+        { userId: userIdObj, ...calendarScheduledItemMatch(monthStart, monthEnd) },
+        archivedIds
+    );
 
     const calendarDays = await ScheduledItem.aggregate([
         {
           $match: calendarMatch,
         },
         {
+          $addFields: {
+            dashboardDate: dashboardEffectiveDateExpression(),
+          },
+        },
+        {
           $project: {
             day: {
               $dateToString: {
                 format: "%Y-%m-%d",
-                date: "$startAt",
+                date: "$dashboardDate",
                 timezone: "America/Toronto", // important
               },
             },
@@ -242,7 +290,7 @@ export async function buildDashboard(userId: string): Promise<DashboardResponse>
     return { counts, upcoming, graph, calendarMonth, today, connectedInboxCount };
 }
 
-/** Scheduled items for a single day (date = YYYY-MM-DD, UTC day bounds). Sorted by startAt. */
+/** Scheduled items for a single day (date = YYYY-MM-DD, UTC day bounds). Sorted by dashboard date. */
 export async function getTimelineForDate(
     userId: string,
     dateStr: string
@@ -258,13 +306,15 @@ export async function getTimelineForDate(
     const dayMatch = scheduledItemMatchExcludingArchived(
         {
             userId: userIdObj,
-            startAt: { $gte: dayStart, $lt: dayEnd },
+            ...calendarScheduledItemMatch(dayStart, dayEnd),
         },
         archivedIds
     );
-    const items = await ScheduledItem.find(dayMatch)
-        .sort({ startAt: 1 })
-        .lean();
+    const items = await ScheduledItem.aggregate([
+        { $match: dayMatch },
+        { $addFields: { dashboardDate: dashboardEffectiveDateExpression() } },
+        { $sort: { dashboardDate: 1, startAt: 1 } },
+    ]);
     return {
         date: dateStr,
         items: (items as any[]).map(mapScheduledItemToDashboardRow),
