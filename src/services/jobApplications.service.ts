@@ -5,6 +5,7 @@ import mongoose, { type QueryFilter } from "mongoose";
 import { notifyDashboardUpdate } from "./sse.service";
 import {
   enqueueScheduledItemDelete,
+  enqueueScheduledItemUpsert,
   type ScheduledItemDeleteSnapshot,
 } from "./googleCalendar.service";
 
@@ -134,6 +135,34 @@ export interface ApplicationEventScheduledItem {
   links: { label: string; url: string }[];
 }
 
+export interface ScheduledItemInput {
+  type: ApplicationEventScheduledItem["type"];
+  title: string;
+  startAt: string;
+  endAt?: string | null;
+  timezone: string;
+  notes?: string | null;
+  links?: { label: string; url: string }[];
+}
+
+export type PatchScheduledItemInput = Partial<ScheduledItemInput> & {
+  completed?: boolean;
+};
+
+function mapScheduledItem(item: any): ApplicationEventScheduledItem {
+  return {
+    id: item._id.toString(),
+    type: item.type,
+    title: item.title,
+    startAt: item.startAt.toISOString(),
+    endAt: item.endAt ? item.endAt.toISOString() : undefined,
+    timezone: item.timezone,
+    completedAt: item.completedAt ? item.completedAt.toISOString() : undefined,
+    notes: item.notes,
+    links: Array.isArray(item.links) ? item.links : [],
+  };
+}
+
 export interface ApplicationEventItem {
   id: string;
   eventType: string;
@@ -187,17 +216,7 @@ export async function getApplicationEventsService(
   return events.map((doc: any) => {
     const sid = doc._id.toString();
     const items = scheduledByEventId.get(sid) ?? [];
-    const scheduledItems: ApplicationEventScheduledItem[] = items.map((si: any) => ({
-      id: si._id.toString(),
-      type: si.type,
-      title: si.title,
-      startAt: si.startAt.toISOString(),
-      endAt: si.endAt ? si.endAt.toISOString() : undefined,
-      timezone: si.timezone,
-      completedAt: si.completedAt ? si.completedAt.toISOString() : undefined,
-      notes: si.notes,
-      links: Array.isArray(si.links) ? si.links : [],
-    }));
+    const scheduledItems: ApplicationEventScheduledItem[] = items.map(mapScheduledItem);
 
     return {
       id: sid,
@@ -272,43 +291,6 @@ export interface PatchApplicationEventInput {
   status?: EventStatus;
   receivedAt?: string;
   aiSummary?: string | null;
-}
-
-export async function patchScheduledItemCompletionForUser(
-  userId: string,
-  applicationId: string,
-  scheduledItemId: string,
-  completed: boolean
-): Promise<ApplicationEventScheduledItem | null> {
-  const appId = new mongoose.Types.ObjectId(applicationId);
-  const itemId = new mongoose.Types.ObjectId(scheduledItemId);
-  const userObjId = new mongoose.Types.ObjectId(userId);
-
-  const ownsApp = await Application.exists({ _id: appId, userId: userObjId });
-  if (!ownsApp) return null;
-
-  const item = await ScheduledItem.findOne({
-    _id: itemId,
-    userId: userObjId,
-    applicationId: appId,
-  });
-  if (!item) return null;
-
-  item.completedAt = completed ? new Date() : null;
-  await item.save();
-  notifyDashboardUpdate(userId, { applicationId, internal: true });
-
-  return {
-    id: item._id.toString(),
-    type: item.type,
-    title: item.title,
-    startAt: item.startAt.toISOString(),
-    endAt: item.endAt ? item.endAt.toISOString() : undefined,
-    timezone: item.timezone,
-    completedAt: item.completedAt ? item.completedAt.toISOString() : undefined,
-    notes: item.notes,
-    links: Array.isArray(item.links) ? item.links : [],
-  };
 }
 
 export async function patchApplicationEventForUser(
@@ -440,6 +422,56 @@ export async function patchScheduledItemCompletionForUser(
   scheduledItemId: string,
   completed: boolean
 ): Promise<ApplicationEventScheduledItem | null> {
+  return patchScheduledItemForUser(userId, applicationId, scheduledItemId, { completed });
+}
+
+export async function createScheduledItemForUser(
+  userId: string,
+  applicationId: string,
+  eventId: string,
+  input: ScheduledItemInput
+): Promise<ApplicationEventScheduledItem | null> {
+  const appId = new mongoose.Types.ObjectId(applicationId);
+  const eid = new mongoose.Types.ObjectId(eventId);
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  const event = await Event.findOne({
+    _id: eid,
+    userId: userObjId,
+    applicationId: appId,
+  }).select("_id");
+  if (!event) return null;
+
+  const app = await Application.findOne({ _id: appId, userId: userObjId }).select("companyName roleTitle");
+  if (!app) return null;
+
+  const scheduledItem = await ScheduledItem.create({
+    userId: userObjId,
+    applicationId: appId,
+    eventId: eid,
+    type: input.type,
+    title: input.title.trim(),
+    startAt: new Date(input.startAt),
+    endAt: input.endAt ? new Date(input.endAt) : undefined,
+    timezone: input.timezone.trim(),
+    notes: input.notes?.trim() || undefined,
+    links: input.links ?? [],
+    companyName: app.companyName,
+    roleTitle: app.roleTitle,
+    source: "manual",
+  });
+
+  enqueueScheduledItemUpsert(userId, scheduledItem._id.toString());
+  notifyDashboardUpdate(userId, { applicationId, internal: true });
+  return mapScheduledItem(scheduledItem);
+}
+
+export async function patchScheduledItemForUser(
+  userId: string,
+  applicationId: string,
+  scheduledItemId: string,
+  patch: PatchScheduledItemInput
+): Promise<ApplicationEventScheduledItem | null> {
   const appId = new mongoose.Types.ObjectId(applicationId);
   const sid = new mongoose.Types.ObjectId(scheduledItemId);
   const userObjId = new mongoose.Types.ObjectId(userId);
@@ -454,19 +486,43 @@ export async function patchScheduledItemCompletionForUser(
   });
   if (!scheduledItem) return null;
 
-  scheduledItem.completedAt = completed ? new Date() : null;
-  await scheduledItem.save();
-  notifyDashboardUpdate(userId, { internal: true });
+  if (patch.type !== undefined) scheduledItem.type = patch.type;
+  if (patch.title !== undefined) scheduledItem.title = patch.title.trim();
+  if (patch.startAt !== undefined) scheduledItem.startAt = new Date(patch.startAt);
+  if (patch.endAt !== undefined) scheduledItem.endAt = patch.endAt ? new Date(patch.endAt) : undefined;
+  if (patch.timezone !== undefined) scheduledItem.timezone = patch.timezone.trim();
+  if (patch.notes !== undefined) scheduledItem.notes = patch.notes?.trim() || undefined;
+  if (patch.links !== undefined) scheduledItem.links = patch.links;
+  if (patch.completed !== undefined) scheduledItem.completedAt = patch.completed ? new Date() : null;
 
-  return {
-    id: (scheduledItem._id as mongoose.Types.ObjectId).toString(),
-    type: scheduledItem.type,
-    title: scheduledItem.title,
-    startAt: scheduledItem.startAt.toISOString(),
-    endAt: scheduledItem.endAt ? scheduledItem.endAt.toISOString() : undefined,
-    timezone: scheduledItem.timezone,
-    completedAt: scheduledItem.completedAt ? scheduledItem.completedAt.toISOString() : undefined,
-    notes: scheduledItem.notes,
-    links: Array.isArray(scheduledItem.links) ? scheduledItem.links : [],
-  };
+  await scheduledItem.save();
+  const shouldSyncCalendar = Object.keys(patch).some((field) => field !== "completed");
+  if (shouldSyncCalendar) {
+    enqueueScheduledItemUpsert(userId, scheduledItem._id.toString());
+  }
+  notifyDashboardUpdate(userId, { applicationId, internal: true });
+
+  return mapScheduledItem(scheduledItem);
+}
+
+export async function deleteScheduledItemForUser(
+  userId: string,
+  applicationId: string,
+  scheduledItemId: string
+): Promise<boolean> {
+  const appId = new mongoose.Types.ObjectId(applicationId);
+  const sid = new mongoose.Types.ObjectId(scheduledItemId);
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  const scheduledItem = await ScheduledItem.findOne({
+    _id: sid,
+    userId: userObjId,
+    applicationId: appId,
+  }).select("_id googleSync");
+  if (!scheduledItem) return false;
+
+  await ScheduledItem.deleteOne({ _id: sid, userId: userObjId, applicationId: appId });
+  enqueueScheduledItemDelete(userId, scheduledItemDeleteSnapshot(scheduledItem));
+  notifyDashboardUpdate(userId, { applicationId, internal: true });
+  return true;
 }
